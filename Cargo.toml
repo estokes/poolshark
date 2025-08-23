@@ -6,10 +6,10 @@ documentation = "https://docs.rs/netidx-pool"
 edition = "2024"
 keywords = ["pool", "recycle", "object-pool"]
 license = "MIT"
-name = "netidx-pool"
+name = "poolshark"
 readme = "README.md"
 repository = "https://github.com/estokes/netidx"
-version = "0.29.0"
+version = "0.1.0"
 
 [features]
 default = ["triomphe", "indexmap", "serde"]
@@ -19,10 +19,10 @@ serde = ["dep:serde", "dep:serde_derive"]
 
 
 [dependencies]
-crossbeam-queue = { workspace = true }
-fxhash = { workspace = true }
-parking_lot = { workspace = true }
-indexmap = { workspace = true, optional = true }
-serde_derive = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
-triomphe = { workspace = true, optional = true }
+crossbeam-queue = "0.3"
+fxhash = "0.2"
+parking_lot = "0.12.1"
+indexmap = { version = "2", optional = true }
+serde_derive = { version = "1", optional = true }
+serde = { version = "1", optional = true }
+triomphe = { version = "0.1", optional = true }
