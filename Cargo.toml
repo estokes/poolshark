@@ -2,14 +2,14 @@
 authors = ["Eric Stokes <letaris@gmail.com>"]
 categories = ["caching", "memory-management"]
 description = "Thread safe object pool"
-documentation = "https://docs.rs/netidx-pool"
+documentation = "https://docs.rs/poolshark"
 edition = "2024"
 keywords = ["pool", "recycle", "object-pool"]
 license = "MIT"
 name = "poolshark"
 readme = "README.md"
-repository = "https://github.com/estokes/netidx"
-version = "0.1.0"
+repository = "https://github.com/estokes/poolshark"
+version = "0.1.1"
 
 [features]
 default = ["triomphe", "indexmap", "serde"]
