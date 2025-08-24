@@ -24,22 +24,38 @@ pub mod pooled;
 #[cfg(test)]
 mod test;
 
-/// Take a poolable type T from the generic thread local pool set. It
-/// is much more efficient to construct your own pools.  size and max
-/// are the pool parameters used if the pool doesn't already exist.
-pub fn take_t<T: Any + Poolable + Send + 'static>(size: usize, max: usize) -> Pooled<T> {
-    thread_local! {
-        static POOLS: RefCell<FxHashMap<TypeId, Box<dyn Any>>> =
-            RefCell::new(HashMap::default());
-    }
-    POOLS.with(|pools| {
-        let mut pools = pools.borrow_mut();
-        let pool: &mut Pool<T> = pools
+thread_local! {
+    static POOLS: RefCell<FxHashMap<TypeId, Box<dyn Any>>> =
+        RefCell::new(HashMap::default());
+}
+
+/// Get a reference to a pool from the generic thread local pool set. This is
+/// much more efficient than using `take_t` because the pool only needs to be
+/// looked up once. `size` and `max` are only used if the pool doesn't already
+/// exist. For more control over pools you can use `Pool` directly.
+pub fn pool<T: Any + Poolable + Send + 'static>(size: usize, max: usize) -> Pool<T> {
+    POOLS.with_borrow_mut(|pools| {
+        pools
             .entry(TypeId::of::<T>())
             .or_insert_with(|| Box::new(Pool::<T>::new(size, max)))
-            .downcast_mut()
-            .unwrap();
-        pool.take()
+            .downcast_ref::<Pool<T>>()
+            .unwrap()
+            .clone()
+    })
+}
+
+/// Take a poolable type T from the generic thread local pool set. It is much
+/// more efficient to construct your own pools (or use `pool` and keep the pool
+/// somewhere). size and max are the pool parameters used if the pool doesn't
+/// already exist.
+pub fn take_t<T: Any + Poolable + Send + 'static>(size: usize, max: usize) -> Pooled<T> {
+    POOLS.with_borrow_mut(|pools| {
+        pools
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(Pool::<T>::new(size, max)))
+            .downcast_ref::<Pool<T>>()
+            .unwrap()
+            .take()
     })
 }
 
@@ -302,8 +318,14 @@ pub type Pool<T> = RawPool<Pooled<T>>;
 /// if, during an attempted return, a pool already has
 /// `maximum_capacity` objects in the pool, the pool will throw away
 /// that object.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RawPool<T: RawPoolable + Send + 'static>(Arc<PoolInner<T>>);
+
+impl<T: RawPoolable + Send + 'static> Clone for RawPool<T> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
 
 impl<T: RawPoolable + Send + 'static> RawPool<T> {
     pub fn downgrade(&self) -> WeakPool<T> {

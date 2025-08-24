@@ -5,7 +5,7 @@ data structures in the standard library, as well as many useful
 external data structures such as IndexMap, triomphe::Arc, etc.
 
 It limits the pool size as well as the element size to prevent memory
-waste, and it slowly deallocates pooled items on a background thread.
+waste.
 
 ```rust
 use std::sync::LazyLock;
