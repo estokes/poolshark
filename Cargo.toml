@@ -9,7 +9,7 @@ license = "MIT"
 name = "poolshark"
 readme = "README.md"
 repository = "https://github.com/estokes/poolshark"
-version = "0.1.3"
+version = "0.1.4"
 
 [features]
 default = ["triomphe", "indexmap", "serde"]
