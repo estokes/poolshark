@@ -2,9 +2,8 @@
 /// modifications
 use crossbeam_queue::ArrayQueue;
 use fxhash::FxHashMap;
-use parking_lot::Mutex;
 #[cfg(feature = "serde")]
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     any::{Any, TypeId},
     borrow::Borrow,
@@ -17,7 +16,7 @@ use std::{
     mem::{self, ManuallyDrop},
     ops::{Deref, DerefMut},
     ptr,
-    sync::{Arc, LazyLock, Weak},
+    sync::{Arc, Weak},
 };
 
 pub mod arc;
@@ -177,7 +176,10 @@ impl<T: Poolable + Send + 'static> Pooled<T> {
     /// Creates a `Pooled` that isn't connected to any pool. E.G. for
     /// branches where you know a given `Pooled` will always be empty.
     pub fn orphan(t: T) -> Self {
-        Pooled { pool: ManuallyDrop::new(WeakPool::new()), object: ManuallyDrop::new(t) }
+        Pooled {
+            pool: ManuallyDrop::new(WeakPool::new()),
+            object: ManuallyDrop::new(t),
+        }
     }
 
     /// assign the `Pooled` to the specified pool. When it is dropped
@@ -244,9 +246,7 @@ impl<T: Poolable + Send + 'static + Serialize> Serialize for Pooled<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T: Poolable + Send + 'static + DeserializeOwned> Deserialize<'de>
-    for Pooled<T>
-{
+impl<'de, T: Poolable + Send + 'static + DeserializeOwned> Deserialize<'de> for Pooled<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -264,35 +264,10 @@ impl<'de, T: Poolable + Send + 'static + DeserializeOwned> Deserialize<'de>
     }
 }
 
-trait Prune {
-    fn prune(&self);
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Pid(u32);
-
-impl Pid {
-    fn new() -> Self {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static PID: AtomicU32 = AtomicU32::new(0);
-        Self(PID.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-struct GlobalState {
-    pools: FxHashMap<Pid, Box<dyn Prune + Send + 'static>>,
-    pool_shark_running: bool,
-}
-
-static POOLS: LazyLock<Mutex<GlobalState>> = LazyLock::new(|| {
-    Mutex::new(GlobalState { pools: HashMap::default(), pool_shark_running: false })
-});
-
 #[derive(Debug)]
 struct PoolInner<T: RawPoolable> {
     pool: ArrayQueue<T>,
     max_elt_capacity: usize,
-    id: Pid,
 }
 
 impl<T: RawPoolable> Drop for PoolInner<T> {
@@ -301,21 +276,6 @@ impl<T: RawPoolable> Drop for PoolInner<T> {
             RawPoolable::really_drop(t)
         }
     }
-}
-
-fn pool_shark() {
-    use std::{
-        thread::{sleep, spawn},
-        time::Duration,
-    };
-    spawn(|| loop {
-        sleep(Duration::from_secs(300));
-        {
-            for p in POOLS.lock().pools.values() {
-                p.prune()
-            }
-        }
-    });
 }
 
 #[derive(Clone, Debug)]
@@ -345,20 +305,54 @@ pub type Pool<T> = RawPool<Pooled<T>>;
 #[derive(Clone, Debug)]
 pub struct RawPool<T: RawPoolable + Send + 'static>(Arc<PoolInner<T>>);
 
-impl<T: RawPoolable + Send + 'static> Drop for RawPool<T> {
-    fn drop(&mut self) {
-        // one held by us, and one held by the pool shark. If a weak
-        // ref gets upgraded before we finish the drop the worst that
-        // will happen is that pool won't be pool sharked
-        if Arc::strong_count(&self.0) <= 2 {
-            let res = POOLS.lock().pools.remove(&self.0.id);
-            drop(res)
+impl<T: RawPoolable + Send + 'static> RawPool<T> {
+    pub fn downgrade(&self) -> WeakPool<T> {
+        WeakPool(Arc::downgrade(&self.0))
+    }
+
+    /// creates a new `Pool<T>`. this pool will retain up to
+    /// `max_capacity` objects of size less than or equal to
+    /// max_elt_capacity. Objects larger than max_elt_capacity will be
+    /// deallocated immediatly.
+    pub fn new(max_capacity: usize, max_elt_capacity: usize) -> RawPool<T> {
+        RawPool(Arc::new(PoolInner {
+            pool: ArrayQueue::new(max_capacity),
+            max_elt_capacity,
+        }))
+    }
+
+    /// try to take an element from the pool, return None if it is empty
+    pub fn try_take(&self) -> Option<T> {
+        self.0.pool.pop()
+    }
+
+    /// takes an item from the pool, creating one if none are available.
+    pub fn take(&self) -> T {
+        self.0
+            .pool
+            .pop()
+            .unwrap_or_else(|| RawPoolable::empty(self.downgrade()))
+    }
+
+    /// Insert an object into the pool. The object may be dropped if
+    /// the pool is at capacity, or the object has too much capacity.
+    pub fn insert(&self, mut t: T) {
+        let cap = t.capacity();
+        if cap > 0 && cap <= self.0.max_elt_capacity {
+            t.reset();
+            if let Err(t) = self.0.pool.push(t) {
+                RawPoolable::really_drop(t)
+            }
+        } else {
+            RawPoolable::really_drop(t)
         }
     }
-}
 
-impl<T: RawPoolable + Send + 'static> Prune for RawPool<T> {
-    fn prune(&self) {
+    /// Throw some pooled objects away. If the number of pooled objects is > 10%
+    /// of the capacity then throw away 10% of the capacity. Otherwise throw
+    /// away 1% of the capacity. Always throw away at least 1 object until the
+    /// pool is empty.
+    pub fn prune(&self) {
         let len = self.0.pool.len();
         let ten_percent = std::cmp::max(1, self.0.pool.capacity() / 10);
         let one_percent = std::cmp::max(1, ten_percent / 10);
@@ -378,56 +372,6 @@ impl<T: RawPoolable + Send + 'static> Prune for RawPool<T> {
             if let Some(v) = self.0.pool.pop() {
                 RawPoolable::really_drop(v)
             }
-        }
-    }
-}
-
-impl<T: RawPoolable + Send + 'static> RawPool<T> {
-    pub fn downgrade(&self) -> WeakPool<T> {
-        WeakPool(Arc::downgrade(&self.0))
-    }
-
-    /// creates a new `Pool<T>`. this pool will retain up to
-    /// `max_capacity` objects of size less than or equal to
-    /// max_elt_capacity. Objects larger than max_elt_capacity will be
-    /// deallocated immediatly.
-    pub fn new(max_capacity: usize, max_elt_capacity: usize) -> RawPool<T> {
-        let id = Pid::new();
-        let t = RawPool(Arc::new(PoolInner {
-            pool: ArrayQueue::new(max_capacity),
-            max_elt_capacity,
-            id,
-        }));
-        let mut gs = POOLS.lock();
-        gs.pools.insert(id, Box::new(RawPool(Arc::clone(&t.0))));
-        if !gs.pool_shark_running {
-            gs.pool_shark_running = true;
-            pool_shark()
-        }
-        t
-    }
-
-    /// try to take an element from the pool, return None if it is empty
-    pub fn try_take(&self) -> Option<T> {
-        self.0.pool.pop()
-    }
-
-    /// takes an item from the pool, creating one if none are available.
-    pub fn take(&self) -> T {
-        self.0.pool.pop().unwrap_or_else(|| RawPoolable::empty(self.downgrade()))
-    }
-
-    /// Insert an object into the pool. The object may be dropped if
-    /// the pool is at capacity, or the object has too much capacity.
-    pub fn insert(&self, mut t: T) {
-        let cap = t.capacity();
-        if cap > 0 && cap <= self.0.max_elt_capacity {
-            t.reset();
-            if let Err(t) = self.0.pool.push(t) {
-                RawPoolable::really_drop(t)
-            }
-        } else {
-            RawPoolable::really_drop(t)
         }
     }
 }

@@ -101,3 +101,23 @@ impl Poolable for String {
         self.capacity()
     }
 }
+
+impl<T: Poolable> Poolable for Option<T> {
+    fn empty() -> Self {
+        None
+    }
+
+    fn reset(&mut self) {
+        if let Some(inner) = self {
+            inner.reset()
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.as_ref().map(|i| i.capacity()).unwrap_or(0)
+    }
+
+    fn really_dropped(&self) -> bool {
+        self.as_ref().map(|i| i.really_dropped()).unwrap_or(true)
+    }
+}
