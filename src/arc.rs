@@ -5,11 +5,11 @@ use std::{cmp::Eq, fmt::Debug, hash::Hash, mem::ManuallyDrop, ops::Deref, ptr};
 macro_rules! impl_arc {
     ($name:ident, $inner:ident, $uniq:expr) => {
         #[derive(Clone)]
-        pub struct $name<T: Poolable + 'static> {
+        pub struct $name<T: Poolable> {
             inner: ManuallyDrop<$inner<(WeakPool<Self>, T)>>,
         }
 
-        unsafe impl<T: Poolable + 'static> RawPoolable for $name<T> {
+        unsafe impl<T: Poolable> RawPoolable for $name<T> {
             fn empty(pool: super::WeakPool<Self>) -> Self {
                 Self {
                     inner: ManuallyDrop::new($inner::new((pool, T::empty()))),
@@ -30,7 +30,7 @@ macro_rules! impl_arc {
             }
         }
 
-        impl<T: Poolable + 'static> Drop for $name<T> {
+        impl<T: Poolable> Drop for $name<T> {
             fn drop(&mut self) {
                 if !$uniq(&mut self.inner) {
                     unsafe { ManuallyDrop::drop(&mut self.inner) }
@@ -43,7 +43,7 @@ macro_rules! impl_arc {
             }
         }
 
-        impl<T: Poolable + 'static> Deref for $name<T> {
+        impl<T: Poolable> Deref for $name<T> {
             type Target = T;
 
             fn deref(&self) -> &Self::Target {
@@ -51,39 +51,39 @@ macro_rules! impl_arc {
             }
         }
 
-        impl<T: Poolable + Debug + 'static> fmt::Debug for $name<T> {
+        impl<T: Poolable + Debug> fmt::Debug for $name<T> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 self.inner.1.fmt(f)
             }
         }
 
-        impl<T: Poolable + PartialEq + 'static> PartialEq for $name<T> {
+        impl<T: Poolable + PartialEq> PartialEq for $name<T> {
             fn eq(&self, other: &Self) -> bool {
                 self.inner.1 == other.inner.1
             }
         }
 
-        impl<T: Poolable + Eq + 'static> Eq for $name<T> {}
+        impl<T: Poolable + Eq> Eq for $name<T> {}
 
-        impl<T: Poolable + PartialOrd + 'static> PartialOrd for $name<T> {
+        impl<T: Poolable + PartialOrd> PartialOrd for $name<T> {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
                 self.inner.1.partial_cmp(&other.inner.1)
             }
         }
 
-        impl<T: Poolable + Ord + 'static> Ord for $name<T> {
+        impl<T: Poolable + Ord> Ord for $name<T> {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                 self.inner.1.cmp(&other.inner.1)
             }
         }
 
-        impl<T: Poolable + Hash + 'static> Hash for $name<T> {
+        impl<T: Poolable + Hash> Hash for $name<T> {
             fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
                 self.inner.1.hash(state)
             }
         }
 
-        impl<T: Poolable + 'static> $name<T> {
+        impl<T: Poolable> $name<T> {
             /// allocate a new arc from the specified pool and return it containing v
             pub fn new(pool: &RawPool<Self>, v: T) -> Self {
                 let mut t = pool.take();
@@ -109,6 +109,22 @@ macro_rules! impl_arc {
                 $inner::as_ptr(&*self.inner)
             }
         }
+
+        impl<T: Poolable + Clone> $name<T> {
+            pub fn make_mut(&mut self) -> &mut T {
+                if $inner::get_mut(&mut self.inner).is_some() {
+                    return &mut $inner::get_mut(&mut self.inner).unwrap().1;
+                }
+                match self.inner.0.upgrade() {
+                    None => &mut $inner::make_mut(&mut self.inner).1,
+                    Some(p) => {
+                        let v = self.inner.1.clone();
+                        *self = Self::new(&p, v);
+                        &mut $inner::get_mut(&mut self.inner).unwrap().1
+                    }
+                }
+            }
+        }
     };
 }
 
@@ -119,7 +135,7 @@ use triomphe::Arc as TArcInner;
 impl_arc!(TArc, TArcInner, TArcInner::is_unique);
 
 #[cfg(feature = "triomphe")]
-impl<T: Poolable + Send + Sync + 'static> TArc<T> {
+impl<T: Poolable + Send + Sync> TArc<T> {
     pub fn is_unique(&self) -> bool {
         self.inner.is_unique()
     }
@@ -127,3 +143,5 @@ impl<T: Poolable + Send + Sync + 'static> TArc<T> {
 
 use std::sync::Arc as ArcInner;
 impl_arc!(Arc, ArcInner, |a| ArcInner::get_mut(a).is_some());
+
+impl<T: Poolable + Clone> Arc<T> {}
