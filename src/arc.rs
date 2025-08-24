@@ -1,19 +1,19 @@
-use super::{RawPool, RawPoolable, WeakPool};
+use super::{Poolable, RawPool, RawPoolable, WeakPool};
 use core::fmt;
-use std::{
-    cmp::Eq, default::Default, fmt::Debug, hash::Hash, mem::ManuallyDrop, ops::Deref, ptr,
-};
+use std::{cmp::Eq, fmt::Debug, hash::Hash, mem::ManuallyDrop, ops::Deref, ptr};
 
 macro_rules! impl_arc {
     ($name:ident, $inner:ident, $uniq:expr) => {
         #[derive(Clone)]
-        pub struct $name<T: Default + Send + Sync + 'static> {
+        pub struct $name<T: Poolable + Send + Sync + 'static> {
             inner: ManuallyDrop<$inner<(WeakPool<Self>, T)>>,
         }
 
-        unsafe impl<T: Default + Send + Sync + 'static> RawPoolable for $name<T> {
+        unsafe impl<T: Poolable + Send + Sync + 'static> RawPoolable for $name<T> {
             fn empty(pool: super::WeakPool<Self>) -> Self {
-                Self { inner: ManuallyDrop::new($inner::new((pool, T::default()))) }
+                Self {
+                    inner: ManuallyDrop::new($inner::new((pool, T::empty()))),
+                }
             }
 
             fn capacity(&self) -> usize {
@@ -21,7 +21,7 @@ macro_rules! impl_arc {
             }
 
             fn reset(&mut self) {
-                $inner::get_mut(&mut self.inner).unwrap().1 = T::default()
+                $inner::get_mut(&mut self.inner).unwrap().1.reset()
             }
 
             fn really_drop(self) {
@@ -30,7 +30,7 @@ macro_rules! impl_arc {
             }
         }
 
-        impl<T: Default + Send + Sync + 'static> Drop for $name<T> {
+        impl<T: Poolable + Send + Sync + 'static> Drop for $name<T> {
             fn drop(&mut self) {
                 if !$uniq(&mut self.inner) {
                     unsafe { ManuallyDrop::drop(&mut self.inner) }
@@ -43,7 +43,7 @@ macro_rules! impl_arc {
             }
         }
 
-        impl<T: Default + Send + Sync + 'static> Deref for $name<T> {
+        impl<T: Poolable + Send + Sync + 'static> Deref for $name<T> {
             type Target = T;
 
             fn deref(&self) -> &Self::Target {
@@ -51,39 +51,39 @@ macro_rules! impl_arc {
             }
         }
 
-        impl<T: Debug + Default + Send + Sync + 'static> fmt::Debug for $name<T> {
+        impl<T: Poolable + Debug + Send + Sync + 'static> fmt::Debug for $name<T> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 self.inner.1.fmt(f)
             }
         }
 
-        impl<T: PartialEq + Default + Send + Sync + 'static> PartialEq for $name<T> {
+        impl<T: Poolable + PartialEq + Send + Sync + 'static> PartialEq for $name<T> {
             fn eq(&self, other: &Self) -> bool {
                 self.inner.1 == other.inner.1
             }
         }
 
-        impl<T: Eq + Default + Send + Sync + 'static> Eq for $name<T> {}
+        impl<T: Poolable + Eq + Send + Sync + 'static> Eq for $name<T> {}
 
-        impl<T: PartialOrd + Default + Send + Sync + 'static> PartialOrd for $name<T> {
+        impl<T: Poolable + PartialOrd + Send + Sync + 'static> PartialOrd for $name<T> {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
                 self.inner.1.partial_cmp(&other.inner.1)
             }
         }
 
-        impl<T: Ord + Default + Send + Sync + 'static> Ord for $name<T> {
+        impl<T: Poolable + Ord + Send + Sync + 'static> Ord for $name<T> {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                 self.inner.1.cmp(&other.inner.1)
             }
         }
 
-        impl<T: Hash + Default + Send + Sync + 'static> Hash for $name<T> {
+        impl<T: Poolable + Hash + Send + Sync + 'static> Hash for $name<T> {
             fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
                 self.inner.1.hash(state)
             }
         }
 
-        impl<T: Default + Send + Sync + 'static> $name<T> {
+        impl<T: Poolable + Send + Sync + 'static> $name<T> {
             /// allocate a new arc from the specified pool and return it containing v
             pub fn new(pool: &RawPool<Self>, v: T) -> Self {
                 let mut t = pool.take();
@@ -119,7 +119,7 @@ use triomphe::Arc as TArcInner;
 impl_arc!(TArc, TArcInner, TArcInner::is_unique);
 
 #[cfg(feature = "triomphe")]
-impl<T: Default + Send + Sync + 'static> TArc<T> {
+impl<T: Poolable + Send + Sync + 'static> TArc<T> {
     pub fn is_unique(&self) -> bool {
         self.inner.is_unique()
     }
