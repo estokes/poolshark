@@ -11,7 +11,7 @@ use std::{
     cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd},
     collections::HashMap,
     default::Default,
-    fmt::Debug,
+    fmt::{self, Debug},
     hash::{Hash, Hasher},
     mem::{self, ManuallyDrop},
     ops::{Deref, DerefMut},
@@ -33,14 +33,14 @@ thread_local! {
 /// much more efficient than using `take_t` because the pool only needs to be
 /// looked up once. `size` and `max` are only used if the pool doesn't already
 /// exist. For more control over pools you can use `Pool` directly.
-pub fn pool<T: Any + Poolable + Send + 'static>(size: usize, max: usize) -> Pool<T> {
+pub fn pool<T: Any + Poolable + 'static>(size: usize, max: usize) -> Pool<T> {
     POOLS.with_borrow_mut(|pools| {
-        pools
+        (*pools
             .entry(TypeId::of::<T>())
             .or_insert_with(|| Box::new(Pool::<T>::new(size, max)))
             .downcast_ref::<Pool<T>>()
-            .unwrap()
-            .clone()
+            .unwrap())
+        .clone()
     })
 }
 
@@ -48,7 +48,7 @@ pub fn pool<T: Any + Poolable + Send + 'static>(size: usize, max: usize) -> Pool
 /// more efficient to construct your own pools (or use `pool` and keep the pool
 /// somewhere). size and max are the pool parameters used if the pool doesn't
 /// already exist.
-pub fn take_t<T: Any + Poolable + Send + 'static>(size: usize, max: usize) -> Pooled<T> {
+pub fn take_t<T: Any + Poolable + 'static>(size: usize, max: usize) -> Pooled<T> {
     POOLS.with_borrow_mut(|pools| {
         pools
             .entry(TypeId::of::<T>())
@@ -77,7 +77,7 @@ pub fn take_t<T: Any + Poolable + Send + 'static>(size: usize, max: usize) -> Po
 /// Most of the time you should use the `Pooled` wrapper as it's
 /// required trait is much eaiser to implement and there is no
 /// practial place to put the pool pointer besides on the stack.
-pub unsafe trait RawPoolable: Send + Sized {
+pub unsafe trait RawPoolable: Sized {
     /// allocate a new empty object and set it's pool pointer to `pool`
     fn empty(pool: WeakPool<Self>) -> Self;
 
@@ -120,13 +120,19 @@ pub trait Poolable {
 /// container type easily.
 ///
 /// Most of the time, this is what you want to use.
-#[derive(Debug, Clone)]
-pub struct Pooled<T: Poolable + Send + 'static> {
+#[derive(Clone)]
+pub struct Pooled<T: Poolable + 'static> {
     pool: ManuallyDrop<WeakPool<Self>>,
     object: ManuallyDrop<T>,
 }
 
-unsafe impl<T: Poolable + Send + 'static> RawPoolable for Pooled<T> {
+impl<T: Poolable + 'static + Debug> fmt::Debug for Pooled<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", &self.object)
+    }
+}
+
+unsafe impl<T: Poolable + 'static> RawPoolable for Pooled<T> {
     fn empty(pool: WeakPool<Self>) -> Self {
         Pooled {
             pool: ManuallyDrop::new(pool),
@@ -147,7 +153,7 @@ unsafe impl<T: Poolable + Send + 'static> RawPoolable for Pooled<T> {
     }
 }
 
-impl<T: Poolable + Send + 'static> Borrow<T> for Pooled<T> {
+impl<T: Poolable + 'static> Borrow<T> for Pooled<T> {
     fn borrow(&self) -> &T {
         &self.object
     }
@@ -159,27 +165,27 @@ impl Borrow<str> for Pooled<String> {
     }
 }
 
-impl<T: Poolable + Send + 'static + PartialEq> PartialEq for Pooled<T> {
+impl<T: Poolable + 'static + PartialEq> PartialEq for Pooled<T> {
     fn eq(&self, other: &Pooled<T>) -> bool {
         self.object.eq(&other.object)
     }
 }
 
-impl<T: Poolable + Send + 'static + Eq> Eq for Pooled<T> {}
+impl<T: Poolable + 'static + Eq> Eq for Pooled<T> {}
 
-impl<T: Poolable + Send + 'static + PartialOrd> PartialOrd for Pooled<T> {
+impl<T: Poolable + 'static + PartialOrd> PartialOrd for Pooled<T> {
     fn partial_cmp(&self, other: &Pooled<T>) -> Option<Ordering> {
         self.object.partial_cmp(&other.object)
     }
 }
 
-impl<T: Poolable + Send + 'static + Ord> Ord for Pooled<T> {
+impl<T: Poolable + 'static + Ord> Ord for Pooled<T> {
     fn cmp(&self, other: &Pooled<T>) -> Ordering {
         self.object.cmp(&other.object)
     }
 }
 
-impl<T: Poolable + Send + 'static + Hash> Hash for Pooled<T> {
+impl<T: Poolable + 'static + Hash> Hash for Pooled<T> {
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -188,7 +194,7 @@ impl<T: Poolable + Send + 'static + Hash> Hash for Pooled<T> {
     }
 }
 
-impl<T: Poolable + Send + 'static> Pooled<T> {
+impl<T: Poolable + 'static> Pooled<T> {
     /// Creates a `Pooled` that isn't connected to any pool. E.G. for
     /// branches where you know a given `Pooled` will always be empty.
     pub fn orphan(t: T) -> Self {
@@ -217,13 +223,13 @@ impl<T: Poolable + Send + 'static> Pooled<T> {
     }
 }
 
-impl<T: Poolable + Send + 'static> AsRef<T> for Pooled<T> {
+impl<T: Poolable + 'static> AsRef<T> for Pooled<T> {
     fn as_ref(&self) -> &T {
         &self.object
     }
 }
 
-impl<T: Poolable + Send + 'static> Deref for Pooled<T> {
+impl<T: Poolable + 'static> Deref for Pooled<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -231,13 +237,13 @@ impl<T: Poolable + Send + 'static> Deref for Pooled<T> {
     }
 }
 
-impl<T: Poolable + Send + 'static> DerefMut for Pooled<T> {
+impl<T: Poolable + 'static> DerefMut for Pooled<T> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.object
     }
 }
 
-impl<T: Poolable + Send + 'static> Drop for Pooled<T> {
+impl<T: Poolable + 'static> Drop for Pooled<T> {
     fn drop(&mut self) {
         if self.really_dropped() {
             match self.pool.upgrade() {
@@ -252,7 +258,7 @@ impl<T: Poolable + Send + 'static> Drop for Pooled<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T: Poolable + Send + 'static + Serialize> Serialize for Pooled<T> {
+impl<T: Poolable + 'static + Serialize> Serialize for Pooled<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -262,7 +268,7 @@ impl<T: Poolable + Send + 'static + Serialize> Serialize for Pooled<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T: Poolable + Send + 'static + DeserializeOwned> Deserialize<'de> for Pooled<T> {
+impl<'de, T: Poolable + 'static + DeserializeOwned> Deserialize<'de> for Pooled<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -282,8 +288,8 @@ impl<'de, T: Poolable + Send + 'static + DeserializeOwned> Deserialize<'de> for 
 
 #[derive(Debug)]
 struct PoolInner<T: RawPoolable> {
-    pool: ArrayQueue<T>,
     max_elt_capacity: usize,
+    pool: ArrayQueue<T>,
 }
 
 impl<T: RawPoolable> Drop for PoolInner<T> {
@@ -294,10 +300,21 @@ impl<T: RawPoolable> Drop for PoolInner<T> {
     }
 }
 
-#[derive(Clone, Debug)]
 pub struct WeakPool<T: RawPoolable>(Weak<PoolInner<T>>);
 
-impl<T: RawPoolable + Send + 'static> WeakPool<T> {
+impl<T: RawPoolable + 'static> Debug for WeakPool<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<weak pool>")
+    }
+}
+
+impl<T: RawPoolable + 'static> Clone for WeakPool<T> {
+    fn clone(&self) -> Self {
+        Self(Weak::clone(&self.0))
+    }
+}
+
+impl<T: RawPoolable + 'static> WeakPool<T> {
     pub fn new() -> Self {
         WeakPool(Weak::new())
     }
@@ -319,15 +336,15 @@ pub type Pool<T> = RawPool<Pooled<T>>;
 /// `maximum_capacity` objects in the pool, the pool will throw away
 /// that object.
 #[derive(Debug)]
-pub struct RawPool<T: RawPoolable + Send + 'static>(Arc<PoolInner<T>>);
+pub struct RawPool<T: RawPoolable + 'static>(Arc<PoolInner<T>>);
 
-impl<T: RawPoolable + Send + 'static> Clone for RawPool<T> {
+impl<T: RawPoolable + 'static> Clone for RawPool<T> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-impl<T: RawPoolable + Send + 'static> RawPool<T> {
+impl<T: RawPoolable + 'static> RawPool<T> {
     pub fn downgrade(&self) -> WeakPool<T> {
         WeakPool(Arc::downgrade(&self.0))
     }
