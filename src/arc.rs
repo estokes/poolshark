@@ -111,9 +111,11 @@ macro_rules! impl_arc {
         }
 
         impl<T: Poolable + Clone> $name<T> {
-            pub fn make_mut(&mut self) -> &mut T {
-                if $inner::get_mut(&mut self.inner).is_some() {
-                    return &mut $inner::get_mut(&mut self.inner).unwrap().1;
+            pub fn make_mut<'a>(&'a mut self) -> &'a mut T {
+                if let Some(p) =
+                    $inner::get_mut(&mut self.inner).map(|p| p as *mut (WeakPool<Self>, T))
+                {
+                    return unsafe { &mut (*p).1 };
                 }
                 match self.inner.0.upgrade() {
                     None => &mut $inner::make_mut(&mut self.inner).1,
@@ -141,7 +143,45 @@ impl<T: Poolable + Send + Sync> TArc<T> {
     }
 }
 
-use std::sync::Arc as ArcInner;
+use std::sync::{Arc as ArcInner, Weak as WeakInner};
 impl_arc!(Arc, ArcInner, |a| ArcInner::get_mut(a).is_some());
 
-impl<T: Poolable + Clone> Arc<T> {}
+impl<T: Poolable + Clone> Arc<T> {
+    pub fn downgrade(&self) -> Weak<T> {
+        Weak {
+            inner: ArcInner::downgrade(&*self.inner),
+        }
+    }
+
+    pub fn weak_count(&self) -> usize {
+        ArcInner::weak_count(&*self.inner)
+    }
+}
+
+pub struct Weak<T: Poolable> {
+    inner: WeakInner<(WeakPool<Arc<T>>, T)>,
+}
+
+impl<T: Poolable> Clone for Weak<T> {
+    fn clone(&self) -> Self {
+        Weak {
+            inner: WeakInner::clone(&self.inner),
+        }
+    }
+}
+
+impl<T: Poolable> Weak<T> {
+    pub fn upgrade(&self) -> Option<Arc<T>> {
+        WeakInner::upgrade(&self.inner).map(|inner| Arc {
+            inner: ManuallyDrop::new(inner),
+        })
+    }
+
+    pub fn strong_count(&self) -> usize {
+        WeakInner::strong_count(&self.inner)
+    }
+
+    pub fn weak_count(&self) -> usize {
+        WeakInner::weak_count(&self.inner)
+    }
+}
