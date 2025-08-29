@@ -18,6 +18,7 @@
 //! drawback is that you can't share pooled objects between threads, and so you
 //! may end up wasting more memory.
 use global::WeakPool;
+pub use poolshark_derive::location_id;
 use std::alloc::Layout;
 
 pub mod global;
@@ -28,11 +29,6 @@ pub mod pooled;
 /// poolshark_derive::location_id!() macro to generate one
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LocationId(pub u16);
-
-#[macro_export]
-macro_rules! location_id {
-    () => {{ $crate::LocationId(poolshark_derive::location_id!()) }};
-}
 
 #[cfg(test)]
 mod test;

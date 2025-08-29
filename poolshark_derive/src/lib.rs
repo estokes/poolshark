@@ -70,5 +70,9 @@ pub fn location_id(_input: TokenStream) -> TokenStream {
     );
     let path = Path::new(".poolshark_loc_ids");
     let id = allocate_id(path, key);
-    quote!(#id).into()
+    if crate_name == "poolshark" {
+        quote!(crate::LocationId(#id)).into()
+    } else {
+        quote!(poolshark::LocationId(#id)).into()
+    }
 }
