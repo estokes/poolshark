@@ -1,7 +1,4 @@
-use std::{
-    alloc::Layout,
-    sync::atomic::{AtomicU16, Ordering},
-};
+use std::{alloc::Layout, cell::Cell};
 
 pub mod global;
 pub mod local;
@@ -14,17 +11,44 @@ mod test;
 pub struct ContainerId(u16);
 
 impl ContainerId {
+    /// Will never be used for an id, Discriminant will reject it, so you can
+    /// use it as a default value in a thread local Cell to init your own ids
+    pub const INVALID: ContainerId = ContainerId(0);
+
     pub fn new() -> Self {
-        static NEXT: AtomicU16 = AtomicU16::new(16);
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        thread_local! {
+            static NEXT: Cell<u16> = Cell::new(16);
+        }
+        let id = NEXT.get();
         if id < 16 {
             panic!("too many container implementations")
         }
+        NEXT.set(id + 1);
         Self(id)
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// Get a unique container id for a given macro site for a given thread. This
+/// will generate a unique container id the first time, and then will always
+/// return the same id with low overhead.
+#[macro_export]
+macro_rules! container_id_once {
+    () => {{
+        thread_local! {
+            static ID: ::core::cell::Cell<$crate::ContainerId> =
+                ::core::cell::Cell::new($crate::ContainerId::INVALID);
+        }
+        let id = ID.get();
+        if id != $crate::ContainerId::INVALID {
+            id
+        } else {
+            ID.set($crate::ContainerId::new());
+            ID.get()
+        }
+    }};
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ULayout(u16);
 
 impl Default for ULayout {
@@ -41,14 +65,22 @@ impl ULayout {
         if size >= 0x0FFF {
             return None;
         }
-        if align > 0x0F {
+        if align > 0x10 {
             return None;
         }
         Some(Self(((size << 4) | (0x0F & align)) as u16))
     }
+
+    fn new_size<const SIZE: usize>() -> Option<Self> {
+        // slight abuse of ULayout ...
+        if SIZE > 0xFFFF {
+            return None;
+        }
+        Some(ULayout(SIZE as u16))
+    }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Discriminant {
     container: ContainerId,
     elements: [ULayout; 3],
@@ -56,6 +88,9 @@ pub struct Discriminant {
 
 impl Discriminant {
     pub fn new(id: ContainerId) -> Option<Discriminant> {
+        if id == ContainerId::INVALID {
+            return None;
+        }
         Some(Discriminant {
             container: id,
             elements: [ULayout::default(); 3],
@@ -63,6 +98,10 @@ impl Discriminant {
     }
 
     pub fn new_p1<T>(id: ContainerId) -> Option<Discriminant> {
+        if id == ContainerId::INVALID {
+            eprintln!("invalid id");
+            return None;
+        }
         let mut elements = [ULayout::default(); 3];
         elements[0] = ULayout::new::<T>()?;
         Some(Discriminant {
@@ -71,7 +110,24 @@ impl Discriminant {
         })
     }
 
+    pub fn new_p1_size<T, const SIZE: usize>(id: ContainerId) -> Option<Discriminant> {
+        if id == ContainerId::INVALID {
+            eprintln!("invalid id");
+            return None;
+        }
+        let mut elements = [ULayout::default(); 3];
+        elements[0] = ULayout::new::<T>()?;
+        elements[1] = ULayout::new_size::<SIZE>()?;
+        Some(Discriminant {
+            container: id,
+            elements,
+        })
+    }
+
     pub fn new_p2<T, U>(id: ContainerId) -> Option<Discriminant> {
+        if id == ContainerId::INVALID {
+            return None;
+        }
         let mut elements = [ULayout::default(); 3];
         elements[0] = ULayout::new::<T>()?;
         elements[1] = ULayout::new::<U>()?;
@@ -81,7 +137,24 @@ impl Discriminant {
         })
     }
 
+    pub fn new_p2_size<T, U, const SIZE: usize>(id: ContainerId) -> Option<Discriminant> {
+        if id == ContainerId::INVALID {
+            return None;
+        }
+        let mut elements = [ULayout::default(); 3];
+        elements[0] = ULayout::new::<T>()?;
+        elements[1] = ULayout::new::<U>()?;
+        elements[2] = ULayout::new_size::<SIZE>()?;
+        Some(Discriminant {
+            container: id,
+            elements,
+        })
+    }
+
     pub fn new_p3<T, U, V>(id: ContainerId) -> Option<Discriminant> {
+        if id == ContainerId::INVALID {
+            return None;
+        }
         let mut elements = [ULayout::default(); 3];
         elements[0] = ULayout::new::<T>()?;
         elements[1] = ULayout::new::<U>()?;

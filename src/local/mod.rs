@@ -66,10 +66,12 @@ where
     T: LocalPoolable,
     F: FnOnce(Option<&mut Pool<T>>) -> R,
 {
-    POOLS.with_borrow_mut(|pools| match T::discriminant() {
-        Some(d) => {
-            let pool =
-                pools.entry(d).or_insert_with(|| {
+    let mut f = Some(f);
+    let res = POOLS.try_with(|pools| match pools.try_borrow_mut() {
+        Err(_) => (f.take().unwrap())(None),
+        Ok(mut pools) => match T::discriminant() {
+            Some(d) => {
+                let pool = pools.entry(d).or_insert_with(|| {
                     let size = *SIZES.lock().unwrap().get(&d).unwrap_or(&1024);
                     let b = Box::new(Pool::<T>::new(size));
                     let t = Box::into_raw(b) as *mut ();
@@ -78,10 +80,15 @@ where
                     }) as Box<dyn FnOnce(*mut ())>);
                     Opaque { t, drop }
                 });
-            f(unsafe { Some(&mut *(pool.t as *mut Pool<T>)) })
-        }
-        None => f(None),
-    })
+                (f.take().unwrap())(unsafe { Some(&mut *(pool.t as *mut Pool<T>)) })
+            }
+            None => (f.take().unwrap())(None),
+        },
+    });
+    match res {
+        Err(_) => (f.take().unwrap())(None),
+        Ok(r) => r,
+    }
 }
 
 /// Clear all thread local pools on this thread. Note this will happen
@@ -117,16 +124,22 @@ pub fn take<T: LocalPoolable>() -> T {
 }
 
 /// Insert a T into the pool. If there is no space in the pool available to hold
-/// T then return it, otherwise return None
-pub fn insert<T: LocalPoolable>(mut t: T) -> Option<T> {
-    t.reset();
+/// T then return it wrapped in a ManuallyDrop, otherwise return None. Do not
+/// reset T, the caller is responsible for resetting T. If you do not, horrible
+/// things can happen.
+pub unsafe fn insert_raw<T: LocalPoolable>(t: T) -> Option<ManuallyDrop<T>> {
     with_pool(|pool| match pool {
         Some(pool) if pool.data.len() < pool.max => {
             pool.data.push(t);
             None
         }
-        None | Some(_) => Some(t),
+        None | Some(_) => Some(ManuallyDrop::new(t)),
     })
+}
+
+pub fn insert<T: LocalPoolable>(mut t: T) -> Option<ManuallyDrop<T>> {
+    t.reset();
+    unsafe { insert_raw(t) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -182,7 +195,7 @@ impl<T: LocalPoolable> Drop for Pooled<T> {
         if self.really_dropped() {
             match insert(unsafe { ptr::read(&*self.0) }) {
                 None => (),
-                Some(t) => drop(t),
+                Some(mut t) => unsafe { ManuallyDrop::drop(&mut t) },
             }
         } else {
             unsafe {

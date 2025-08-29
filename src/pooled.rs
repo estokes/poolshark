@@ -40,9 +40,9 @@ macro_rules! impl_hashmap {
     };
 }
 
-impl_hashmap!(HashMap, ContainerId(0));
+impl_hashmap!(HashMap, ContainerId(1));
 #[cfg(feature = "indexmap")]
-impl_hashmap!(IndexMap, ContainerId(1));
+impl_hashmap!(IndexMap, ContainerId(2));
 
 macro_rules! impl_hashset {
     ($ty:ident, $id:expr) => {
@@ -76,9 +76,9 @@ macro_rules! impl_hashset {
     };
 }
 
-impl_hashset!(HashSet, ContainerId(2));
+impl_hashset!(HashSet, ContainerId(3));
 #[cfg(feature = "indexmap")]
-impl_hashset!(IndexSet, ContainerId(3));
+impl_hashset!(IndexSet, ContainerId(4));
 
 impl<T> Poolable for Vec<T> {
     fn empty() -> Self {
@@ -96,7 +96,7 @@ impl<T> Poolable for Vec<T> {
 
 unsafe impl<T> LocalPoolable for Vec<T> {
     fn discriminant() -> Option<Discriminant> {
-        Discriminant::new_p1::<T>(ContainerId(4))
+        Discriminant::new_p1::<T>(ContainerId(5))
     }
 }
 
@@ -116,7 +116,7 @@ impl<T> Poolable for VecDeque<T> {
 
 unsafe impl<T> LocalPoolable for VecDeque<T> {
     fn discriminant() -> Option<Discriminant> {
-        Discriminant::new_p1::<T>(ContainerId(5))
+        Discriminant::new_p1::<T>(ContainerId(6))
     }
 }
 
@@ -136,7 +136,7 @@ impl Poolable for String {
 
 unsafe impl LocalPoolable for String {
     fn discriminant() -> Option<Discriminant> {
-        Discriminant::new(ContainerId(6))
+        Discriminant::new(ContainerId(7))
     }
 }
 
@@ -164,7 +164,7 @@ unsafe impl<T: LocalPoolable> LocalPoolable for Option<T> {
     fn discriminant() -> Option<Discriminant> {
         let inner = T::discriminant()?;
         Some(Discriminant {
-            container: ContainerId(7),
+            container: ContainerId(8),
             elements: inner.elements,
         })
     }
