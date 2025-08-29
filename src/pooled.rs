@@ -1,4 +1,4 @@
-use super::{ContainerId, Discriminant, LocalPoolable, Poolable};
+use super::{Discriminant, LocalPoolable, Poolable, location_id};
 #[cfg(feature = "indexmap")]
 use indexmap::{IndexMap, IndexSet};
 use std::{
@@ -9,7 +9,7 @@ use std::{
 };
 
 macro_rules! impl_hashmap {
-    ($ty:ident, $id:expr) => {
+    ($ty:ident) => {
         impl<K, V, R> Poolable for $ty<K, V, R>
         where
             K: Hash + Eq,
@@ -33,19 +33,17 @@ macro_rules! impl_hashmap {
             K: Hash + Eq,
             R: Default + BuildHasher,
         {
-            fn discriminant() -> Option<Discriminant> {
-                Discriminant::new_p3::<K, V, R>($id)
-            }
+            const DISCRIMINANT: Discriminant = Discriminant::new_p3::<K, V, R>(location_id!());
         }
     };
 }
 
-impl_hashmap!(HashMap, ContainerId(1));
+impl_hashmap!(HashMap);
 #[cfg(feature = "indexmap")]
-impl_hashmap!(IndexMap, ContainerId(2));
+impl_hashmap!(IndexMap);
 
 macro_rules! impl_hashset {
-    ($ty:ident, $id:expr) => {
+    ($ty:ident) => {
         impl<K, R> Poolable for $ty<K, R>
         where
             K: Hash + Eq,
@@ -69,16 +67,14 @@ macro_rules! impl_hashset {
             K: Hash + Eq,
             R: Default + BuildHasher,
         {
-            fn discriminant() -> Option<Discriminant> {
-                Discriminant::new_p2::<K, R>($id)
-            }
+            const DISCRIMINANT: Discriminant = Discriminant::new_p2::<K, R>(location_id!());
         }
     };
 }
 
-impl_hashset!(HashSet, ContainerId(3));
+impl_hashset!(HashSet);
 #[cfg(feature = "indexmap")]
-impl_hashset!(IndexSet, ContainerId(4));
+impl_hashset!(IndexSet);
 
 impl<T> Poolable for Vec<T> {
     fn empty() -> Self {
@@ -95,9 +91,7 @@ impl<T> Poolable for Vec<T> {
 }
 
 unsafe impl<T> LocalPoolable for Vec<T> {
-    fn discriminant() -> Option<Discriminant> {
-        Discriminant::new_p1::<T>(ContainerId(5))
-    }
+    const DISCRIMINANT: Discriminant = Discriminant::new_p1::<T>(location_id!());
 }
 
 impl<T> Poolable for VecDeque<T> {
@@ -115,9 +109,7 @@ impl<T> Poolable for VecDeque<T> {
 }
 
 unsafe impl<T> LocalPoolable for VecDeque<T> {
-    fn discriminant() -> Option<Discriminant> {
-        Discriminant::new_p1::<T>(ContainerId(6))
-    }
+    const DISCRIMINANT: Discriminant = Discriminant::new_p1::<T>(location_id!());
 }
 
 impl Poolable for String {
@@ -135,9 +127,7 @@ impl Poolable for String {
 }
 
 unsafe impl LocalPoolable for String {
-    fn discriminant() -> Option<Discriminant> {
-        Discriminant::new(ContainerId(7))
-    }
+    const DISCRIMINANT: Discriminant = Discriminant::new(location_id!());
 }
 
 impl<T: Poolable> Poolable for Option<T> {
@@ -161,11 +151,11 @@ impl<T: Poolable> Poolable for Option<T> {
 }
 
 unsafe impl<T: LocalPoolable> LocalPoolable for Option<T> {
-    fn discriminant() -> Option<Discriminant> {
-        let inner = T::discriminant()?;
-        Some(Discriminant {
-            container: ContainerId(8),
+    const DISCRIMINANT: Discriminant = {
+        let inner = T::DISCRIMINANT;
+        Discriminant {
+            container: location_id!(),
             elements: inner.elements,
-        })
-    }
+        }
+    };
 }
