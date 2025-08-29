@@ -17,7 +17,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use crate::Poolable;
+use crate::{Poolable, RawPoolable};
 
 pub mod arc;
 
@@ -54,41 +54,6 @@ pub fn take_t<T: Any + Poolable>(size: usize, max: usize) -> Pooled<T> {
             .unwrap()
             .take()
     })
-}
-
-/// Implementing this trait allows full low level control over where
-/// the pool pointer is stored. For example if you are pooling an
-/// allocated data structure, you could store the pool pointer in the
-/// allocation to keep the size of the handle struct to a
-/// minimum. E.G. you're pooling a ThinArc. Or, if you have a static
-/// global pool, then you would not need to keep a pool pointer at
-/// all.
-///
-/// The object's drop implementation should return the object to the
-/// pool instead of deallocating it
-///
-/// Implementing this trait correctly is extremely tricky, and
-/// requires unsafe code in almost all cases, therefore it is marked
-/// as unsafe
-///
-/// Most of the time you should use the `Pooled` wrapper as it's
-/// required trait is much eaiser to implement and there is no
-/// practial place to put the pool pointer besides on the stack.
-pub unsafe trait RawPoolable: Sized {
-    /// allocate a new empty object and set it's pool pointer to `pool`
-    fn empty(pool: WeakPool<Self>) -> Self;
-
-    /// empty the collection and reset it to it's default state so it
-    /// can be put back in the pool
-    fn reset(&mut self);
-
-    /// return the capacity of the collection
-    fn capacity(&self) -> usize;
-
-    /// Actually drop the inner object, don't put it back in the pool,
-    /// make sure you do not call both this method and the drop
-    /// implementation that puts the object back in the pool!
-    fn really_drop(self);
 }
 
 /// A generic wrapper for pooled objects. This handles keeping track

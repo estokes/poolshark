@@ -24,13 +24,15 @@ use std::{
 
 struct Pool<T: LocalPoolable> {
     max: usize,
+    max_capacity: usize,
     data: Vec<T>,
 }
 
 impl<T: LocalPoolable> Pool<T> {
-    fn new(max: usize) -> Self {
+    fn new(max: usize, max_capacity: usize) -> Self {
         Self {
             max,
+            max_capacity,
             data: Vec::with_capacity(max),
         }
     }
@@ -54,7 +56,9 @@ thread_local! {
         RefCell::new(HashMap::default());
 }
 
-static SIZES: LazyLock<Mutex<FxHashMap<Discriminant, usize>>> =
+const DEFAULT_SIZES: (usize, usize) = (1024, 1024);
+
+static SIZES: LazyLock<Mutex<FxHashMap<Discriminant, (usize, usize)>>> =
     LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 // This is safe because:
@@ -67,13 +71,21 @@ where
     F: FnOnce(Option<&mut Pool<T>>) -> R,
 {
     let mut f = Some(f);
+    // if the user implements Drop on the pooled item and tries to put it back
+    // in the pool then we will end up calling ourselves recursively from the
+    // pool destructor. This is why we must use try_with on the thread local
     let res = POOLS.try_with(|pools| match pools.try_borrow_mut() {
         Err(_) => (f.take().unwrap())(None),
         Ok(mut pools) => match T::discriminant() {
             Some(d) => {
                 let pool = pools.entry(d).or_insert_with(|| {
-                    let size = *SIZES.lock().unwrap().get(&d).unwrap_or(&1024);
-                    let b = Box::new(Pool::<T>::new(size));
+                    let (size, cap) = SIZES
+                        .lock()
+                        .unwrap()
+                        .get(&d)
+                        .map(|(s, c)| (*s, *c))
+                        .unwrap_or(DEFAULT_SIZES);
+                    let b = Box::new(Pool::<T>::new(size, cap));
                     let t = Box::into_raw(b) as *mut ();
                     let drop = Some(Box::new(|t: *mut ()| unsafe {
                         drop(Box::from_raw(t as *mut Pool<T>))
@@ -111,10 +123,27 @@ pub fn clear_type<T: LocalPoolable>() {
 /// not be resized, but new pools (on new threads) will use the specified size
 /// as their max size. If you wish to resize an existing pool you can first
 /// clear_type (or clear) and then set_size.
-pub fn set_size<T: LocalPoolable>(size: usize) {
+pub fn set_size<T: LocalPoolable>(max_pool_size: usize, max_element_capacity: usize) {
     if let Some(d) = T::discriminant() {
-        SIZES.lock().unwrap().insert(d, size);
+        SIZES
+            .lock()
+            .unwrap()
+            .insert(d, (max_pool_size, max_element_capacity));
     }
+}
+
+/// get the max pool size and the max element capacity for a given type. None
+/// means the type can't be pooled because one of it's layouts is too big.
+pub fn get_size<T: LocalPoolable>() -> Option<(usize, usize)> {
+    let d = T::discriminant()?;
+    Some(
+        SIZES
+            .lock()
+            .unwrap()
+            .get(&d)
+            .map(|(s, c)| (*s, *c))
+            .unwrap_or(DEFAULT_SIZES),
+    )
 }
 
 /// Take a T from the pool, if there is no pool for T or there are none pooled
@@ -127,17 +156,17 @@ pub fn take<T: LocalPoolable>() -> T {
 /// T then return it wrapped in a ManuallyDrop, otherwise return None. Do not
 /// reset T, the caller is responsible for resetting T. If you do not, horrible
 /// things can happen.
-pub unsafe fn insert_raw<T: LocalPoolable>(t: T) -> Option<ManuallyDrop<T>> {
+pub unsafe fn insert_raw<T: LocalPoolable>(t: T) -> Option<T> {
     with_pool(|pool| match pool {
-        Some(pool) if pool.data.len() < pool.max => {
+        Some(pool) if pool.data.len() < pool.max && t.capacity() <= pool.max_capacity => {
             pool.data.push(t);
             None
         }
-        None | Some(_) => Some(ManuallyDrop::new(t)),
+        None | Some(_) => Some(t),
     })
 }
 
-pub fn insert<T: LocalPoolable>(mut t: T) -> Option<ManuallyDrop<T>> {
+pub fn insert<T: LocalPoolable>(mut t: T) -> Option<T> {
     t.reset();
     unsafe { insert_raw(t) }
 }
@@ -193,9 +222,8 @@ impl<T: LocalPoolable> DerefMut for Pooled<T> {
 impl<T: LocalPoolable> Drop for Pooled<T> {
     fn drop(&mut self) {
         if self.really_dropped() {
-            match insert(unsafe { ptr::read(&*self.0) }) {
-                None => (),
-                Some(mut t) => unsafe { ManuallyDrop::drop(&mut t) },
+            if let Some(t) = insert(unsafe { ptr::read(&*self.0) }) {
+                drop(t)
             }
         } else {
             unsafe {
