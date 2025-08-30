@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     fs::OpenOptions,
     io::{self, BufRead, BufReader, Seek, Write},
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
 };
 
@@ -20,6 +21,7 @@ impl BuildEnv {
             crate_name: String::new(),
         };
         let mut args = std::env::args();
+        let mut dep = PathBuf::new();
         while let Some(arg) = args.next() {
             if arg == "--out-dir" {
                 t.out_dir = PathBuf::from(args.next().expect("missing out dir"));
@@ -27,12 +29,32 @@ impl BuildEnv {
             if arg == "--crate-name" {
                 t.crate_name = args.next().expect("missing crate name");
             }
+            if let Some(s) = arg.strip_prefix("dependency=") {
+                dep = PathBuf::from(s)
+            }
         }
         if !t.out_dir.is_dir() {
-            panic!("could not find out_dir, or not a directory")
+            if dep.is_dir() {
+                t.out_dir = dep;
+            } else {
+                t.out_dir = PathBuf::from("target/debug/deps")
+            }
         }
-        if t.crate_name.is_empty() {
-            panic!("could not find crate name")
+        if t.crate_name.is_empty() || t.crate_name.starts_with("-") {
+            match std::env::var("CARGO_PKG_NAME") {
+                Ok(n) => t.crate_name = n,
+                Err(_) => {
+                    let dir = t.out_dir.parent().expect("could not find crate name");
+                    let dir = dir.parent().expect("could not find crate name");
+                    let dir = dir.parent().expect("could not find crate name");
+                    t.crate_name = String::from_utf8_lossy(
+                        dir.file_name()
+                            .expect("could not find crate name")
+                            .as_bytes(),
+                    )
+                    .into_owned();
+                }
+            }
         }
         t
     }
