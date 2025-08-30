@@ -81,13 +81,13 @@ where
     // pool destructor. This is why we must use try_with on the thread local
     let res = POOLS.try_with(|pools| match pools.try_borrow_mut() {
         Err(_) => (f.take().unwrap())(None),
-        Ok(mut pools) => {
-            let pool =
-                pools.entry(T::DISCRIMINANT).or_insert_with(|| {
+        Ok(mut pools) => match T::DISCRIMINANT {
+            Some(d) => {
+                let pool = pools.entry(d).or_insert_with(|| {
                     let (size, cap) = SIZES
                         .lock()
                         .unwrap()
-                        .get(&T::DISCRIMINANT)
+                        .get(&d)
                         .map(|(s, c)| (*s, *c))
                         .unwrap_or(DEFAULT_SIZES);
                     let b = Box::new(Pool::<T>::new(size, cap));
@@ -97,8 +97,10 @@ where
                     }) as Box<dyn FnOnce(*mut ())>);
                     Opaque { t, drop }
                 });
-            (f.take().unwrap())(unsafe { Some(&mut *(pool.t as *mut Pool<T>)) })
-        }
+                (f.take().unwrap())(unsafe { Some(&mut *(pool.t as *mut Pool<T>)) })
+            }
+            None => (f.take().unwrap())(None),
+        },
     });
     match res {
         Err(_) => (f.take().unwrap())(None),
@@ -116,7 +118,9 @@ pub fn clear() {
 /// happen automatically when the current thread dies.
 pub fn clear_type<T: LocalPoolable>() {
     POOLS.with_borrow_mut(|pools| {
-        pools.remove(&T::DISCRIMINANT);
+        if let Some(d) = T::DISCRIMINANT {
+            pools.remove(&d);
+        }
     })
 }
 
@@ -125,20 +129,25 @@ pub fn clear_type<T: LocalPoolable>() {
 /// as their max size. If you wish to resize an existing pool you can first
 /// clear_type (or clear) and then set_size.
 pub fn set_size<T: LocalPoolable>(max_pool_size: usize, max_element_capacity: usize) {
-    SIZES
-        .lock()
-        .unwrap()
-        .insert(T::DISCRIMINANT, (max_pool_size, max_element_capacity));
+    if let Some(d) = T::DISCRIMINANT {
+        SIZES
+            .lock()
+            .unwrap()
+            .insert(d, (max_pool_size, max_element_capacity));
+    }
 }
 
-/// get the max pool size and the max element capacity for a given type.
-pub fn get_size<T: LocalPoolable>() -> (usize, usize) {
-    SIZES
-        .lock()
-        .unwrap()
-        .get(&T::DISCRIMINANT)
-        .map(|(s, c)| (*s, *c))
-        .unwrap_or(DEFAULT_SIZES)
+/// get the max pool size and the max element capacity for a given type. If
+/// get_size returns None then the type will not be pooled.
+pub fn get_size<T: LocalPoolable>() -> Option<(usize, usize)> {
+    T::DISCRIMINANT.map(|d| {
+        SIZES
+            .lock()
+            .unwrap()
+            .get(&d)
+            .map(|(s, c)| (*s, *c))
+            .unwrap_or(DEFAULT_SIZES)
+    })
 }
 
 /// Take a T from the pool, if there is no pool for T or there are no Ts pooled

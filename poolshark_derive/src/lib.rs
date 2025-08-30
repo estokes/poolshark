@@ -3,11 +3,40 @@ use quote::quote;
 use std::{
     cmp::max,
     collections::BTreeMap,
-    env,
     fs::OpenOptions,
     io::{self, BufRead, BufReader, Seek, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
+
+struct BuildEnv {
+    out_dir: PathBuf,
+    crate_name: String,
+}
+
+impl BuildEnv {
+    fn get() -> Self {
+        let mut t = Self {
+            out_dir: PathBuf::new(),
+            crate_name: String::new(),
+        };
+        let mut args = std::env::args();
+        while let Some(arg) = args.next() {
+            if arg == "--out-dir" {
+                t.out_dir = PathBuf::from(args.next().expect("missing out dir"));
+            }
+            if arg == "--crate-name" {
+                t.crate_name = args.next().expect("missing crate name");
+            }
+        }
+        if !t.out_dir.is_dir() {
+            panic!("could not find out_dir, or not a directory")
+        }
+        if t.crate_name.is_empty() {
+            panic!("could not find crate name")
+        }
+        t
+    }
+}
 
 fn allocate_id(path: &Path, key: String) -> u16 {
     let file = OpenOptions::new()
@@ -59,18 +88,18 @@ fn allocate_id(path: &Path, key: String) -> u16 {
 
 #[proc_macro]
 pub fn location_id(_input: TokenStream) -> TokenStream {
-    let crate_name = env::var("CARGO_PKG_NAME").expect("missing CARGO_PKG_NAME");
+    let cfg = BuildEnv::get();
     let loc = Span::call_site();
     let key = format!(
         "{}:{}:{}:{}",
-        crate_name,
+        cfg.crate_name,
         loc.file(),
         loc.line(),
         loc.column()
     );
-    let path = Path::new(".poolshark_loc_ids");
-    let id = allocate_id(path, key);
-    if crate_name == "poolshark" {
+    let path = cfg.out_dir.join(".poolshark_loc_ids");
+    let id = allocate_id(&path, key);
+    if cfg.crate_name == "poolshark" {
         quote!(crate::LocationId(#id)).into()
     } else {
         quote!(poolshark::LocationId(#id)).into()

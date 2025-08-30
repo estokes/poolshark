@@ -33,7 +33,8 @@ macro_rules! impl_hashmap {
             K: Hash + Eq,
             R: Default + BuildHasher,
         {
-            const DISCRIMINANT: Discriminant = Discriminant::new_p3::<K, V, R>(location_id!());
+            const DISCRIMINANT: Option<Discriminant> =
+                Discriminant::new_p3::<K, V, R>(location_id!());
         }
     };
 }
@@ -67,7 +68,7 @@ macro_rules! impl_hashset {
             K: Hash + Eq,
             R: Default + BuildHasher,
         {
-            const DISCRIMINANT: Discriminant = Discriminant::new_p2::<K, R>(location_id!());
+            const DISCRIMINANT: Option<Discriminant> = Discriminant::new_p2::<K, R>(location_id!());
         }
     };
 }
@@ -91,7 +92,7 @@ impl<T> Poolable for Vec<T> {
 }
 
 unsafe impl<T> LocalPoolable for Vec<T> {
-    const DISCRIMINANT: Discriminant = Discriminant::new_p1::<T>(location_id!());
+    const DISCRIMINANT: Option<Discriminant> = Discriminant::new_p1::<T>(location_id!());
 }
 
 impl<T> Poolable for VecDeque<T> {
@@ -109,7 +110,7 @@ impl<T> Poolable for VecDeque<T> {
 }
 
 unsafe impl<T> LocalPoolable for VecDeque<T> {
-    const DISCRIMINANT: Discriminant = Discriminant::new_p1::<T>(location_id!());
+    const DISCRIMINANT: Option<Discriminant> = Discriminant::new_p1::<T>(location_id!());
 }
 
 impl Poolable for String {
@@ -127,7 +128,7 @@ impl Poolable for String {
 }
 
 unsafe impl LocalPoolable for String {
-    const DISCRIMINANT: Discriminant = Discriminant::new(location_id!());
+    const DISCRIMINANT: Option<Discriminant> = Discriminant::new(location_id!());
 }
 
 impl<T: Poolable> Poolable for Option<T> {
@@ -151,11 +152,13 @@ impl<T: Poolable> Poolable for Option<T> {
 }
 
 unsafe impl<T: LocalPoolable> LocalPoolable for Option<T> {
-    const DISCRIMINANT: Discriminant = {
-        let inner = T::DISCRIMINANT;
-        Discriminant {
-            container: location_id!(),
-            elements: inner.elements,
+    const DISCRIMINANT: Option<Discriminant> = {
+        match T::DISCRIMINANT {
+            None => None,
+            Some(inner) => Some(Discriminant {
+                container: location_id!(),
+                elements: inner.elements,
+            }),
         }
     };
 }

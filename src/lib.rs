@@ -47,25 +47,25 @@ impl ULayout {
         Self(0)
     }
 
-    const fn new<T>() -> Self {
+    const fn new<T>() -> Option<Self> {
         let l = Layout::new::<T>();
         let size = l.size();
         let align = l.align();
         if size >= 0x0FFF {
-            panic!("poolshark: size of type too big. max 0x0FFF")
+            return None;
         }
         if align > 0x10 {
-            panic!("poolshark: alignment of type too big. max 0x10")
+            return None;
         }
-        Self(((size << 4) | (0x0F & align)) as u16)
+        Some(Self(((size << 4) | (0x0F & align)) as u16))
     }
 
-    const fn new_size<const SIZE: usize>() -> Self {
+    const fn new_size<const SIZE: usize>() -> Option<Self> {
         // slight abuse of ULayout ...
         if SIZE > 0xFFFF {
-            panic!("poolshark: size too big, max 0xFFFF")
+            return None;
         }
-        ULayout(SIZE as u16)
+        Some(ULayout(SIZE as u16))
     }
 }
 
@@ -76,62 +76,95 @@ pub struct Discriminant {
 }
 
 impl Discriminant {
-    pub const fn new(id: LocationId) -> Discriminant {
-        Discriminant {
+    pub const fn new(id: LocationId) -> Option<Discriminant> {
+        Some(Discriminant {
             container: id,
             elements: [ULayout::empty(); 3],
-        }
+        })
     }
 
-    pub const fn new_p1<T>(id: LocationId) -> Discriminant {
+    pub const fn new_p1<T>(id: LocationId) -> Option<Discriminant> {
         let mut elements = [ULayout::empty(); 3];
-        elements[0] = ULayout::new::<T>();
-        Discriminant {
+        match ULayout::new::<T>() {
+            Some(l) => elements[0] = l,
+            None => return None,
+        }
+        Some(Discriminant {
             container: id,
             elements,
-        }
+        })
     }
 
-    pub const fn new_p1_size<T, const SIZE: usize>(id: LocationId) -> Discriminant {
+    pub const fn new_p1_size<T, const SIZE: usize>(id: LocationId) -> Option<Discriminant> {
         let mut elements = [ULayout::empty(); 3];
-        elements[0] = ULayout::new::<T>();
-        elements[1] = ULayout::new_size::<SIZE>();
-        Discriminant {
+        match ULayout::new::<T>() {
+            Some(l) => elements[0] = l,
+            None => return None,
+        }
+        match ULayout::new_size::<SIZE>() {
+            Some(l) => elements[1] = l,
+            None => return None,
+        }
+        Some(Discriminant {
             container: id,
             elements,
-        }
+        })
     }
 
-    pub const fn new_p2<T, U>(id: LocationId) -> Discriminant {
+    pub const fn new_p2<T, U>(id: LocationId) -> Option<Discriminant> {
         let mut elements = [ULayout::empty(); 3];
-        elements[0] = ULayout::new::<T>();
-        elements[1] = ULayout::new::<U>();
-        Discriminant {
+        match ULayout::new::<T>() {
+            Some(l) => elements[0] = l,
+            None => return None,
+        }
+        match ULayout::new::<U>() {
+            Some(l) => elements[1] = l,
+            None => return None,
+        }
+        Some(Discriminant {
             container: id,
             elements,
-        }
+        })
     }
 
-    pub const fn new_p2_size<T, U, const SIZE: usize>(id: LocationId) -> Discriminant {
+    pub const fn new_p2_size<T, U, const SIZE: usize>(id: LocationId) -> Option<Discriminant> {
         let mut elements = [ULayout::empty(); 3];
-        elements[0] = ULayout::new::<T>();
-        elements[1] = ULayout::new::<U>();
-        elements[2] = ULayout::new_size::<SIZE>();
-        Discriminant {
+        match ULayout::new::<T>() {
+            Some(l) => elements[0] = l,
+            None => return None,
+        }
+        match ULayout::new::<U>() {
+            Some(l) => elements[1] = l,
+            None => return None,
+        }
+        match ULayout::new_size::<SIZE>() {
+            Some(l) => elements[2] = l,
+            None => return None,
+        }
+        Some(Discriminant {
             container: id,
             elements,
-        }
+        })
     }
 
-    pub const fn new_p3<T, U, V>(id: LocationId) -> Discriminant {
+    pub const fn new_p3<T, U, V>(id: LocationId) -> Option<Discriminant> {
         let mut elements = [ULayout::empty(); 3];
-        elements[0] = ULayout::new::<T>();
-        elements[1] = ULayout::new::<U>();
-        elements[1] = ULayout::new::<V>();
-        Discriminant {
+        match ULayout::new::<T>() {
+            Some(l) => elements[0] = l,
+            None => return None,
+        }
+        match ULayout::new::<U>() {
+            Some(l) => elements[1] = l,
+            None => return None,
+        }
+        match ULayout::new::<V>() {
+            Some(l) => elements[2] = l,
+            None => return None,
+        }
+        Some(Discriminant {
             container: id,
             elements,
-        }
+        })
     }
 }
 
@@ -242,5 +275,5 @@ pub unsafe trait LocalPoolable: Poolable {
     /// sure they are empty, and thus no errent bit patterns exist in the
     /// container and all we care about is that the container's allocation is
     /// isomorphic with respect to the types we want to put in it.
-    const DISCRIMINANT: Discriminant;
+    const DISCRIMINANT: Option<Discriminant>;
 }
