@@ -193,6 +193,12 @@ impl<T: Poolable + Debug> fmt::Debug for GPooled<T> {
     }
 }
 
+impl<T: IsoPoolable> Default for GPooled<T> {
+    fn default() -> Self {
+        take()
+    }
+}
+
 unsafe impl<T: Poolable> RawPoolable for GPooled<T> {
     fn empty(pool: WeakPool<Self>) -> Self {
         Self {
