@@ -1,4 +1,4 @@
-use super::{Discriminant, LocalPoolable, Poolable, location_id};
+use super::{Discriminant, IsoPoolable, Poolable, location_id};
 #[cfg(feature = "indexmap")]
 use indexmap::{IndexMap, IndexSet};
 use std::{
@@ -28,7 +28,7 @@ macro_rules! impl_hashmap {
             }
         }
 
-        unsafe impl<K, V, R> LocalPoolable for $ty<K, V, R>
+        unsafe impl<K, V, R> IsoPoolable for $ty<K, V, R>
         where
             K: Hash + Eq,
             R: Default + BuildHasher,
@@ -63,7 +63,7 @@ macro_rules! impl_hashset {
             }
         }
 
-        unsafe impl<K, R> LocalPoolable for $ty<K, R>
+        unsafe impl<K, R> IsoPoolable for $ty<K, R>
         where
             K: Hash + Eq,
             R: Default + BuildHasher,
@@ -91,7 +91,7 @@ impl<T> Poolable for Vec<T> {
     }
 }
 
-unsafe impl<T> LocalPoolable for Vec<T> {
+unsafe impl<T> IsoPoolable for Vec<T> {
     const DISCRIMINANT: Option<Discriminant> = Discriminant::new_p1::<T>(location_id!());
 }
 
@@ -109,7 +109,7 @@ impl<T> Poolable for VecDeque<T> {
     }
 }
 
-unsafe impl<T> LocalPoolable for VecDeque<T> {
+unsafe impl<T> IsoPoolable for VecDeque<T> {
     const DISCRIMINANT: Option<Discriminant> = Discriminant::new_p1::<T>(location_id!());
 }
 
@@ -127,7 +127,7 @@ impl Poolable for String {
     }
 }
 
-unsafe impl LocalPoolable for String {
+unsafe impl IsoPoolable for String {
     const DISCRIMINANT: Option<Discriminant> = Discriminant::new(location_id!());
 }
 
@@ -149,16 +149,4 @@ impl<T: Poolable> Poolable for Option<T> {
     fn really_dropped(&mut self) -> bool {
         self.as_mut().map(|i| i.really_dropped()).unwrap_or(true)
     }
-}
-
-unsafe impl<T: LocalPoolable> LocalPoolable for Option<T> {
-    const DISCRIMINANT: Option<Discriminant> = {
-        match T::DISCRIMINANT {
-            None => None,
-            Some(inner) => Some(Discriminant {
-                container: location_id!(),
-                elements: inner.elements,
-            }),
-        }
-    };
 }

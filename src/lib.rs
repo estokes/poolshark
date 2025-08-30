@@ -1,22 +1,68 @@
 //! Recycle expensive to construct/destruct objects
 //!
-//! There are three different ways of using this library.
+//! Memory pooling is a simple idea, malloc and free can be expensive and so can
+//! object initialization, if you malloc and init an object that is used
+//! temporarially, and it's likely you'll want to use a similar object again in
+//! the future, then don't throw all that work away by freeing it, stick it
+//! somewhere until you need it again.
 //!
-//! - Implement the safe trait Poolable for your type. Wrap everything you want
-//! to pool in Pooled, and build static pools. This is the easiest and the
-//! safest, but the performance gains are not as great. Your types get bigger
-//! because they keep the pool pointer. Atomic operations create some overhead
-//! when adding and removing to pools.
+//! There are two different types of pools implemented by this library, global
+//! pools and local pools. Global pools share objects between threads (see
+//! [global::GPooled]), an object taken from a global pool will always return to
+//! the pool it was taken from. Use this if objects are usually dropped on a
+//! different thread than they are created on, for example a producer thread
+//! creating objects for consumer threads. There are several different ways to
+//! use global pools. You can use [global::take] or [global::take_any] to just
+//! take objects from thread local global pools. If you need better performance
+//! you can use [global::pool] or [global::pool_any] and then store the pool
+//! somewhere. If you don't have anywhere to store the pool you can use a static
+//! [std::sync::LazyLock] for a truly global named pool. For example,
 //!
-//! - Implement RawPoolable directly. You can stash the pool pointer anywhere
-//! (or nowhere) and implement other low level optimizations. This is not a safe
-//! trait to implement, so don't do it unless you understand the rust memory
-//! model well.
+//! ```no_run
+//! use std::{sync::LazyLock, collections::HashMap};
+//! use poolshark::global::{Pool, GPooled};
 //!
-//! - Implement LocalPoolable, and use thread local non atomic pools. This is
-//! the fastest solution. It's about as difficult as RawPoolable. It's only
-//! drawback is that you can't share pooled objects between threads, and so you
-//! may end up wasting more memory.
+//! type Widget = HashMap<usize, usize>;
+//!
+//! // create a global static widget pool that will accept up to 1024 widgets with
+//! // up to 64 elements of capacity
+//! static WIDGETS: LazyLock<Pool<Widget>> = LazyLock::new(|| Pool::new(1024, 64));
+//!
+//! fn widget_maker() -> GPooled<Widget> {
+//!     let mut w = WIDGETS.take();
+//!     w.insert(42, 42);
+//!     w
+//! }
+//!
+//! fn widget_user(w: GPooled<Widget>) {
+//!     drop(w) // puts the widget back in the WIDGETS pool
+//! }
+//! ```
+//!
+//! Local pools (see [local::LPooled]) always return dropped objects to a thread
+//! local structure on the thread that drops them. If your objects are produced
+//! and dropped on the same set of threads then a local pool is a good choice.
+//! Local pools are significantly faster than global pools because they avoid
+//! most atomic operations. Local pools require that your container type
+//! implement the unsafe trait IsoPoolable, so they can't be used with all
+//! types. When they can be used they are quite easy,
+//!
+//! ```no_run
+//! use poolshark::local::LPooled;
+//! use std::collections::HashMap;
+//!
+//! type Widget = HashMap<usize, usize>;
+//!
+//! fn widget_maker() -> LPooled<Widget> {
+//!     let mut w = LPooled::<Widget>::default(); // takes from the local pool
+//!     w.insert(42, 42);
+//!     w
+//! }
+//!
+//! fn widget_user(w: LPooled<Widget>) {
+//!     drop(w) // puts the widget back in the local pool
+//! }
+//! ```
 use global::WeakPool;
 pub use poolshark_derive::location_id;
 use std::alloc::Layout;
@@ -168,6 +214,19 @@ impl Discriminant {
     }
 }
 
+struct Opaque {
+    t: *mut (),
+    drop: Option<Box<dyn FnOnce(*mut ())>>,
+}
+
+impl Drop for Opaque {
+    fn drop(&mut self) {
+        if let Some(f) = self.drop.take() {
+            f(self.t)
+        }
+    }
+}
+
 /// Trait for poolable objects
 pub trait Poolable {
     /// allocate a new empty collection
@@ -224,8 +283,9 @@ pub unsafe trait RawPoolable: Sized {
     fn really_drop(self);
 }
 
-/// Trait for thread local poolable objects
-pub unsafe trait LocalPoolable: Poolable {
+/// Trait for isomorphicly poolable objects. That is objects that can safely be
+/// pooled by memory layout and alignment.
+pub unsafe trait IsoPoolable: Poolable {
     /// Build a discriminant for Self. The discriminant container id must be
     /// unique for the container type, for example, Vec must always have a
     /// different container id from HashMap. You can use the macro

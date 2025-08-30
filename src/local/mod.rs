@@ -13,7 +13,7 @@
 //! it. You get to pool objects with minimal atomics without making all your
 //! pooled objects !Send (which is what would happen if you tried to directly use a Vec).
 
-use crate::{Discriminant, LocalPoolable};
+use crate::{Discriminant, IsoPoolable, Opaque};
 use fxhash::FxHashMap;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
@@ -27,31 +27,18 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-struct Pool<T: LocalPoolable> {
+struct Pool<T: IsoPoolable> {
     max: usize,
     max_capacity: usize,
     data: Vec<T>,
 }
 
-impl<T: LocalPoolable> Pool<T> {
+impl<T: IsoPoolable> Pool<T> {
     fn new(max: usize, max_capacity: usize) -> Self {
         Self {
             max,
             max_capacity,
             data: Vec::with_capacity(max),
-        }
-    }
-}
-
-struct Opaque {
-    t: *mut (),
-    drop: Option<Box<dyn FnOnce(*mut ())>>,
-}
-
-impl Drop for Opaque {
-    fn drop(&mut self) {
-        if let Some(f) = self.drop.take() {
-            f(self.t)
         }
     }
 }
@@ -67,12 +54,12 @@ static SIZES: LazyLock<Mutex<FxHashMap<Discriminant, (usize, usize)>>> =
     LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 // This is safe because:
-// 1. Chunks are reset before being returned to pools, so they contain no active K or V values
+// 1. Containers are reset before being returned to pools, so they contain no values
 // 2. We only reuse pools for types with identical memory layouts (same size/alignment via Discriminant)
 // 3. The Opaque wrapper ensures proper cleanup when the thread local is destroyed
 fn with_pool<T, R, F>(f: F) -> R
 where
-    T: LocalPoolable,
+    T: IsoPoolable,
     F: FnOnce(Option<&mut Pool<T>>) -> R,
 {
     let mut f = Some(f);
@@ -116,7 +103,7 @@ pub fn clear() {
 
 /// Delete the thread local pool for the specified K, V and SIZE. This will
 /// happen automatically when the current thread dies.
-pub fn clear_type<T: LocalPoolable>() {
+pub fn clear_type<T: IsoPoolable>() {
     POOLS.with_borrow_mut(|pools| {
         if let Some(d) = T::DISCRIMINANT {
             pools.remove(&d);
@@ -128,7 +115,7 @@ pub fn clear_type<T: LocalPoolable>() {
 /// not be resized, but new pools (on new threads) will use the specified size
 /// as their max size. If you wish to resize an existing pool you can first
 /// clear_type (or clear) and then set_size.
-pub fn set_size<T: LocalPoolable>(max_pool_size: usize, max_element_capacity: usize) {
+pub fn set_size<T: IsoPoolable>(max_pool_size: usize, max_element_capacity: usize) {
     if let Some(d) = T::DISCRIMINANT {
         SIZES
             .lock()
@@ -139,7 +126,7 @@ pub fn set_size<T: LocalPoolable>(max_pool_size: usize, max_element_capacity: us
 
 /// get the max pool size and the max element capacity for a given type. If
 /// get_size returns None then the type will not be pooled.
-pub fn get_size<T: LocalPoolable>() -> Option<(usize, usize)> {
+pub fn get_size<T: IsoPoolable>() -> Option<(usize, usize)> {
     T::DISCRIMINANT.map(|d| {
         SIZES
             .lock()
@@ -152,14 +139,14 @@ pub fn get_size<T: LocalPoolable>() -> Option<(usize, usize)> {
 
 /// Take a T from the pool, if there is no pool for T or there are no Ts pooled
 /// then create a new empty T
-pub fn take<T: LocalPoolable>() -> T {
+pub fn take<T: IsoPoolable>() -> T {
     with_pool(|pool| pool.and_then(|p| p.data.pop())).unwrap_or_else(|| T::empty())
 }
 
 /// Insert a T into the pool. If there is no space in the pool available to hold
-/// T then return it, otherwise return None. Do not reset T, the caller is
+/// T then return it, otherwise return None. Does not reset T, the caller is
 /// responsible for resetting T. If you do not, horrible things can happen.
-pub unsafe fn insert_raw<T: LocalPoolable>(t: T) -> Option<T> {
+pub unsafe fn insert_raw<T: IsoPoolable>(t: T) -> Option<T> {
     with_pool(|pool| match pool {
         Some(pool) if pool.data.len() < pool.max && t.capacity() <= pool.max_capacity => {
             pool.data.push(t);
@@ -172,37 +159,36 @@ pub unsafe fn insert_raw<T: LocalPoolable>(t: T) -> Option<T> {
 /// Insert a T into the pool. If there is no space in the pool available to hold
 /// T then return it, otherwise return None. T will be reset before it is
 /// inserted into the pool. Reset must ensure that T is EMPTY.
-pub fn insert<T: LocalPoolable>(mut t: T) -> Option<T> {
+pub fn insert<T: IsoPoolable>(mut t: T) -> Option<T> {
     t.reset();
     unsafe { insert_raw(t) }
 }
 
-/// A generic wrapper around locally pooled objects that manages Drop for you.
-/// If you have implemented LocalPooled on your object, you can just wrap it in
-/// a Pooled<T> and you should be done. Unlink global::Pooled<T> this object is
-/// zero size.
+/// A zero size wrapper around locally pooled objects that manages Drop for you.
+/// If you have implemented IsoPooled on your object, you can just wrap it in
+/// a LPooled<T> and you should be done.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Pooled<T: LocalPoolable>(ManuallyDrop<T>);
+pub struct LPooled<T: IsoPoolable>(ManuallyDrop<T>);
 
-impl<T: LocalPoolable> Borrow<T> for Pooled<T> {
+impl<T: IsoPoolable> Borrow<T> for LPooled<T> {
     fn borrow(&self) -> &T {
         &self.0
     }
 }
 
-impl Borrow<str> for Pooled<String> {
+impl Borrow<str> for LPooled<String> {
     fn borrow(&self) -> &str {
         &self.0
     }
 }
 
-impl<T: LocalPoolable> Default for Pooled<T> {
+impl<T: IsoPoolable> Default for LPooled<T> {
     fn default() -> Self {
         Self::take()
     }
 }
 
-impl<T: LocalPoolable> Pooled<T> {
+impl<T: IsoPoolable> LPooled<T> {
     pub fn take() -> Self {
         Self(ManuallyDrop::new(take()))
     }
@@ -217,19 +203,19 @@ impl<T: LocalPoolable> Pooled<T> {
     }
 }
 
-impl<T: LocalPoolable> From<T> for Pooled<T> {
+impl<T: IsoPoolable> From<T> for LPooled<T> {
     fn from(t: T) -> Self {
         Self(ManuallyDrop::new(t))
     }
 }
 
-impl<T: LocalPoolable> AsRef<T> for Pooled<T> {
+impl<T: IsoPoolable> AsRef<T> for LPooled<T> {
     fn as_ref(&self) -> &T {
         &self.0
     }
 }
 
-impl<T: LocalPoolable> Deref for Pooled<T> {
+impl<T: IsoPoolable> Deref for LPooled<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -237,13 +223,13 @@ impl<T: LocalPoolable> Deref for Pooled<T> {
     }
 }
 
-impl<T: LocalPoolable> DerefMut for Pooled<T> {
+impl<T: IsoPoolable> DerefMut for LPooled<T> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.0
     }
 }
 
-impl<T: LocalPoolable> Drop for Pooled<T> {
+impl<T: IsoPoolable> Drop for LPooled<T> {
     fn drop(&mut self) {
         if self.really_dropped() {
             if let Some(t) = insert(unsafe { ptr::read(&*self.0) }) {
@@ -258,7 +244,7 @@ impl<T: LocalPoolable> Drop for Pooled<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T: LocalPoolable + Serialize> Serialize for Pooled<T> {
+impl<T: IsoPoolable + Serialize> Serialize for LPooled<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -268,12 +254,12 @@ impl<T: LocalPoolable + Serialize> Serialize for Pooled<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T: LocalPoolable + DeserializeOwned + 'static> Deserialize<'de> for Pooled<T> {
+impl<'de, T: IsoPoolable + DeserializeOwned + 'static> Deserialize<'de> for LPooled<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let mut t = Pooled::take();
+        let mut t = LPooled::take();
         Self::deserialize_in_place(deserializer, &mut t)?;
         Ok(t)
     }

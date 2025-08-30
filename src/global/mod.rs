@@ -1,3 +1,4 @@
+use crate::{Discriminant, IsoPoolable, Opaque, Poolable, RawPoolable};
 use crossbeam_queue::ArrayQueue;
 use fxhash::FxHashMap;
 #[cfg(feature = "serde")]
@@ -14,24 +15,134 @@ use std::{
     mem::{self, ManuallyDrop},
     ops::{Deref, DerefMut},
     ptr,
-    sync::{Arc, Weak},
+    sync::{Arc, LazyLock, Mutex, Weak},
 };
-
-use crate::{Poolable, RawPoolable};
 
 pub mod arc;
 
 thread_local! {
-    static POOLS: RefCell<FxHashMap<TypeId, Box<dyn Any>>> =
+    static POOLS: RefCell<FxHashMap<Discriminant, Opaque>> =
         RefCell::new(HashMap::default());
 }
 
-/// Get a reference to a pool from the generic thread local pool set. This is
-/// much more efficient than using `take_t` because the pool only needs to be
-/// looked up once. `size` and `max` are only used if the pool doesn't already
-/// exist. For more control over pools you can use `Pool` directly.
-pub fn pool<T: Any + Poolable>(size: usize, max: usize) -> Pool<T> {
+const DEFAULT_SIZES: (usize, usize) = (1024, 1024);
+
+static SIZES: LazyLock<Mutex<FxHashMap<Discriminant, (usize, usize)>>> =
+    LazyLock::new(|| Mutex::new(FxHashMap::default()));
+
+// This is safe because:
+// 1. Containers are reset before being returned to pools, so they contain no values
+// 2. We only reuse pools for types with identical memory layouts (same size/alignment via Discriminant)
+// 3. The Opaque wrapper ensures proper cleanup when the thread local is destroyed
+fn with_pool<T, R, F>(f: F) -> R
+where
+    T: IsoPoolable,
+    F: FnOnce(Option<&Pool<T>>) -> R,
+{
+    let mut f = Some(f);
+    // if the user implements Drop on the pooled item and tries to put it back
+    // in the pool then we will end up calling ourselves recursively from the
+    // pool destructor. This is why we must use try_with on the thread local
+    let res = POOLS.try_with(|pools| match pools.try_borrow_mut() {
+        Err(_) => (f.take().unwrap())(None),
+        Ok(mut pools) => match T::DISCRIMINANT {
+            Some(d) => {
+                let pool = pools.entry(d).or_insert_with(|| {
+                    let (size, cap) = SIZES
+                        .lock()
+                        .unwrap()
+                        .get(&d)
+                        .map(|(s, c)| (*s, *c))
+                        .unwrap_or(DEFAULT_SIZES);
+                    let b = Box::new(Pool::<T>::new(size, cap));
+                    let t = Box::into_raw(b) as *mut ();
+                    let drop = Some(Box::new(|t: *mut ()| unsafe {
+                        drop(Box::from_raw(t as *mut Pool<T>))
+                    }) as Box<dyn FnOnce(*mut ())>);
+                    Opaque { t, drop }
+                });
+                (f.take().unwrap())(unsafe { Some(&*(pool.t as *mut Pool<T>)) })
+            }
+            None => (f.take().unwrap())(None),
+        },
+    });
+    match res {
+        Err(_) => (f.take().unwrap())(None),
+        Ok(r) => r,
+    }
+}
+
+/// Clear all thread local pools on this thread. Note this will happen
+/// automatically when the thread dies.
+pub fn clear() {
+    POOLS.with_borrow_mut(|pools| pools.clear())
+}
+
+/// Delete the thread local pool for the specified K, V and SIZE. This will
+/// happen automatically when the current thread dies.
+pub fn clear_type<T: IsoPoolable>() {
     POOLS.with_borrow_mut(|pools| {
+        if let Some(d) = T::DISCRIMINANT {
+            pools.remove(&d);
+        }
+    })
+}
+
+/// Set the pool size for this type. Pools that have already been created will
+/// not be resized, but new pools (on new threads) will use the specified size
+/// as their max size. If you wish to resize an existing pool you can first
+/// clear_type (or clear) and then set_size.
+pub fn set_size<T: IsoPoolable>(max_pool_size: usize, max_element_capacity: usize) {
+    if let Some(d) = T::DISCRIMINANT {
+        SIZES
+            .lock()
+            .unwrap()
+            .insert(d, (max_pool_size, max_element_capacity));
+    }
+}
+
+/// get the max pool size and the max element capacity for a given type. If
+/// get_size returns None then the type will not be pooled.
+pub fn get_size<T: IsoPoolable>() -> Option<(usize, usize)> {
+    T::DISCRIMINANT.map(|d| {
+        SIZES
+            .lock()
+            .unwrap()
+            .get(&d)
+            .map(|(s, c)| (*s, *c))
+            .unwrap_or(DEFAULT_SIZES)
+    })
+}
+
+/// Take a T from the pool, if there is no pool for T or there are no Ts pooled
+/// then create a new empty T. If no gobal pool can exist for T return an orphan.
+pub fn take<T: IsoPoolable>() -> GPooled<T> {
+    with_pool(|pool| {
+        pool.map(|p| p.take())
+            .unwrap_or_else(|| GPooled::orphan(T::empty()))
+    })
+}
+
+/// Return a pointer to the global pool for types isomorphic t T, if one is
+/// possible. You can use get_size, set_size, clear and clear_type to control
+/// these global pools.
+pub fn pool<T: IsoPoolable>() -> Option<Pool<T>> {
+    with_pool(|pool| pool.cloned())
+}
+
+thread_local! {
+    static ANY_POOLS: RefCell<FxHashMap<TypeId, Box<dyn Any>>> =
+        RefCell::new(HashMap::default());
+}
+
+/// Get a reference to a pool from the generic thread local pool set for any
+/// type that implements Any + Poolable. Note this is a different set of pools
+/// vs ones returned by `pool`. If your container type implements both
+/// IsoPoolable and Any then you can choose either of these two pool sets, it
+/// doesn't really matter for performance which one you choose as long as your
+/// choice is consistent.
+pub fn pool_any<T: Any + Poolable>(size: usize, max: usize) -> Pool<T> {
+    ANY_POOLS.with_borrow_mut(|pools| {
         pools
             .entry(TypeId::of::<T>())
             .or_insert_with(|| Box::new(Pool::<T>::new(size, max)))
@@ -41,12 +152,12 @@ pub fn pool<T: Any + Poolable>(size: usize, max: usize) -> Pool<T> {
     })
 }
 
-/// Take a poolable type T from the generic thread local pool set. It is much
-/// more efficient to construct your own pools (or use `pool` and keep the pool
-/// somewhere). size and max are the pool parameters used if the pool doesn't
-/// already exist.
-pub fn take_t<T: Any + Poolable>(size: usize, max: usize) -> Pooled<T> {
-    POOLS.with_borrow_mut(|pools| {
+/// Take a poolable type T that also implements Any from the generic thread
+/// local pool set. It is much more efficient to use `take` if your container
+/// type implements IsoPoolable, and even more efficent to use `pool` or
+/// `pool_any` and store the pool somewhere.
+pub fn take_any<T: Any + Poolable>(size: usize, max: usize) -> GPooled<T> {
+    ANY_POOLS.with_borrow_mut(|pools| {
         pools
             .entry(TypeId::of::<T>())
             .or_insert_with(|| Box::new(Pool::<T>::new(size, max)))
@@ -56,26 +167,35 @@ pub fn take_t<T: Any + Poolable>(size: usize, max: usize) -> Pooled<T> {
     })
 }
 
-/// A generic wrapper for pooled objects. This handles keeping track
-/// of the pool pointer for you and allows you to wrap almost any
-/// container type easily.
+/// A generic wrapper for globally pooled objects.
 ///
-/// Most of the time, this is what you want to use.
+/// Globally pooled objects differ from locally pooled objects because the
+/// glocal pools can be shared between threads. For example in the case of a
+/// producer thread producing objects and sending them to consumer threads an
+/// `LPooled` object would have no value. The dropped objects would just
+/// accumulate in the consumers and would never be available to the producer. In
+/// such a case a GPooled object would be useful because when dropped it will
+/// always return to the pool it was created from, in our case the producer,
+/// making it available for reuse.
+///
+/// Conversely if your objects will mostly be produced and consumed on the same
+/// set of threads, and your containers can implement `IsoPooled` then consider
+/// using `LPooled` objects, as they are considerably faster.
 #[derive(Clone)]
-pub struct Pooled<T: Poolable> {
+pub struct GPooled<T: Poolable> {
     pool: ManuallyDrop<WeakPool<Self>>,
     object: ManuallyDrop<T>,
 }
 
-impl<T: Poolable + Debug> fmt::Debug for Pooled<T> {
+impl<T: Poolable + Debug> fmt::Debug for GPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", &self.object)
     }
 }
 
-unsafe impl<T: Poolable> RawPoolable for Pooled<T> {
+unsafe impl<T: Poolable> RawPoolable for GPooled<T> {
     fn empty(pool: WeakPool<Self>) -> Self {
-        Pooled {
+        Self {
             pool: ManuallyDrop::new(pool),
             object: ManuallyDrop::new(Poolable::empty()),
         }
@@ -94,39 +214,39 @@ unsafe impl<T: Poolable> RawPoolable for Pooled<T> {
     }
 }
 
-impl<T: Poolable> Borrow<T> for Pooled<T> {
+impl<T: Poolable> Borrow<T> for GPooled<T> {
     fn borrow(&self) -> &T {
         &self.object
     }
 }
 
-impl Borrow<str> for Pooled<String> {
+impl Borrow<str> for GPooled<String> {
     fn borrow(&self) -> &str {
         &self.object
     }
 }
 
-impl<T: Poolable + PartialEq> PartialEq for Pooled<T> {
-    fn eq(&self, other: &Pooled<T>) -> bool {
+impl<T: Poolable + PartialEq> PartialEq for GPooled<T> {
+    fn eq(&self, other: &GPooled<T>) -> bool {
         self.object.eq(&other.object)
     }
 }
 
-impl<T: Poolable + Eq> Eq for Pooled<T> {}
+impl<T: Poolable + Eq> Eq for GPooled<T> {}
 
-impl<T: Poolable + PartialOrd> PartialOrd for Pooled<T> {
-    fn partial_cmp(&self, other: &Pooled<T>) -> Option<Ordering> {
+impl<T: Poolable + PartialOrd> PartialOrd for GPooled<T> {
+    fn partial_cmp(&self, other: &GPooled<T>) -> Option<Ordering> {
         self.object.partial_cmp(&other.object)
     }
 }
 
-impl<T: Poolable + Ord> Ord for Pooled<T> {
-    fn cmp(&self, other: &Pooled<T>) -> Ordering {
+impl<T: Poolable + Ord> Ord for GPooled<T> {
+    fn cmp(&self, other: &GPooled<T>) -> Ordering {
         self.object.cmp(&other.object)
     }
 }
 
-impl<T: Poolable + Hash> Hash for Pooled<T> {
+impl<T: Poolable + Hash> Hash for GPooled<T> {
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -135,11 +255,11 @@ impl<T: Poolable + Hash> Hash for Pooled<T> {
     }
 }
 
-impl<T: Poolable> Pooled<T> {
+impl<T: Poolable> GPooled<T> {
     /// Creates a `Pooled` that isn't connected to any pool. E.G. for
     /// branches where you know a given `Pooled` will always be empty.
     pub fn orphan(t: T) -> Self {
-        Pooled {
+        Self {
             pool: ManuallyDrop::new(WeakPool::new()),
             object: ManuallyDrop::new(t),
         }
@@ -164,13 +284,13 @@ impl<T: Poolable> Pooled<T> {
     }
 }
 
-impl<T: Poolable> AsRef<T> for Pooled<T> {
+impl<T: Poolable> AsRef<T> for GPooled<T> {
     fn as_ref(&self) -> &T {
         &self.object
     }
 }
 
-impl<T: Poolable> Deref for Pooled<T> {
+impl<T: Poolable> Deref for GPooled<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -178,13 +298,13 @@ impl<T: Poolable> Deref for Pooled<T> {
     }
 }
 
-impl<T: Poolable> DerefMut for Pooled<T> {
+impl<T: Poolable> DerefMut for GPooled<T> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.object
     }
 }
 
-impl<T: Poolable> Drop for Pooled<T> {
+impl<T: Poolable> Drop for GPooled<T> {
     fn drop(&mut self) {
         if self.really_dropped() {
             match self.pool.upgrade() {
@@ -199,7 +319,7 @@ impl<T: Poolable> Drop for Pooled<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T: Poolable + Serialize> Serialize for Pooled<T> {
+impl<T: Poolable + Serialize> Serialize for GPooled<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -209,12 +329,12 @@ impl<T: Poolable + Serialize> Serialize for Pooled<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T: Poolable + DeserializeOwned + 'static> Deserialize<'de> for Pooled<T> {
+impl<'de, T: Poolable + DeserializeOwned + 'static> Deserialize<'de> for GPooled<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let mut t = take_t::<T>(1000, 1000);
+        let mut t = take_any::<T>(1024, 1024);
         Self::deserialize_in_place(deserializer, &mut t)?;
         Ok(t)
     }
@@ -265,7 +385,7 @@ impl<T: RawPoolable> WeakPool<T> {
     }
 }
 
-pub type Pool<T> = RawPool<Pooled<T>>;
+pub type Pool<T> = RawPool<GPooled<T>>;
 
 /// a lock-free, thread-safe, dynamically-sized object pool.
 ///
