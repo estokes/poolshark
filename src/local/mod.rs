@@ -196,6 +196,12 @@ impl Borrow<str> for Pooled<String> {
     }
 }
 
+impl<T: LocalPoolable> Default for Pooled<T> {
+    fn default() -> Self {
+        Self::take()
+    }
+}
+
 impl<T: LocalPoolable> Pooled<T> {
     pub fn take() -> Self {
         Self(ManuallyDrop::new(take()))
