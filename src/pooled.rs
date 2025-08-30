@@ -1,3 +1,4 @@
+//! Implementations of Poolable on various standard types
 use super::{Discriminant, IsoPoolable, Poolable, location_id};
 #[cfg(feature = "indexmap")]
 use indexmap::{IndexMap, IndexSet};

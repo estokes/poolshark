@@ -1,3 +1,4 @@
+//! Thread safe, lock free, global object pools
 use crate::{Discriminant, IsoPoolable, Opaque, Poolable, RawPoolable};
 use crossbeam_queue::ArrayQueue;
 use fxhash::FxHashMap;

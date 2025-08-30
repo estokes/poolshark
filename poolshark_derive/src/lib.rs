@@ -37,7 +37,10 @@ impl BuildEnv {
             if dep.is_dir() {
                 t.out_dir = dep;
             } else {
-                t.out_dir = PathBuf::from("target/debug/deps")
+                t.out_dir = PathBuf::from("target/debug/deps");
+                if !t.out_dir.is_dir() {
+                    panic!("could not find out dir")
+                }
             }
         }
         if t.crate_name.is_empty() || t.crate_name.starts_with("-") {
@@ -82,7 +85,7 @@ fn allocate_id(path: &Path, key: String) -> u16 {
             }
             Err(e) => panic!("failed to read line {e}"),
         }
-        if let Some((k, v)) = buf.split_once('=') {
+        if let Some((k, v)) = buf.rsplit_once('=') {
             let id: u16 = v.trim().parse().expect("invalid id");
             max_id = max(max_id, id);
             ids.insert(k.trim().to_string(), id);
@@ -108,6 +111,31 @@ fn allocate_id(path: &Path, key: String) -> u16 {
     }
 }
 
+/// Generate a globally unique identifier for a source code position
+///
+/// Every time you invoke this macro it will return generate a unique LocationId
+/// that corresponds to the position in the source code where it was invoked.
+/// This works even across crates, so even if two crates in your project invoke
+/// this macro on the exact same line and column of the exact same file the ID
+/// will still be unique.
+///
+/// ### How?
+///
+/// The ids are stored in a file in the compiler's OUT_DIR, where it's
+/// outputting all the object code for every crate. The file contains a btreemap
+/// of ids where the key is crate_name::file_path::line_number::column_number
+/// and the value is the id.
+///
+/// ### Failure Modes
+///
+/// - Your build system is so exceedingly strange that somehow you are calling
+/// rustc without passing the crate name or the out dir through any known
+/// mechanism (several are tried.). In this case the macro may produce a compile error.
+///
+/// - You are dynamicaly loading separately compiled code. In this case the ids
+/// may conflict, however in our use case (poolshark) we don't care about this
+/// case because separately compiled code will have separate thread local
+/// structures and thus poolshark will still work fine
 #[proc_macro]
 pub fn location_id(_input: TokenStream) -> TokenStream {
     let cfg = BuildEnv::get();

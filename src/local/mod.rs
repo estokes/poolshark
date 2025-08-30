@@ -1,5 +1,7 @@
-//! Thread local pools with minimal atomic operations. This is faster than the
-//! cross thread shared pool, at the cost of the following differences,
+//! Thread local object pools
+//!
+//! This is faster than the cross thread shared pool, at the cost of the
+//! following differences,
 //!
 //! - more memory may be used as pools are thread local, you cannot centrally
 //! share pooled objects

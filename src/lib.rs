@@ -11,13 +11,14 @@
 //! an object taken from a global pool will always return to the pool it was
 //! taken from. Use this if objects are usually dropped on a different thread
 //! than they are created on, for example a producer thread creating objects for
-//! consumer threads. There are several different ways to use global pools. You
-//! can use [take](global::take) or [take_any](global::take_any) to just take
-//! objects from thread local global pools. If you need better performance you
-//! can use [pool](global::pool) or [pool_any](global::pool_any) and then store
-//! the pool somewhere. If you don't have anywhere to store the pool you can use
-//! a static [LazyLock](std::sync::LazyLock) for a truly global named pool. For
-//! example,
+//! consumer threads.
+//!
+//! There are several different ways to use global pools. You can use
+//! [take](global::take) or [take_any](global::take_any) to just take objects
+//! from thread local global pools. If you need better performance you can use
+//! [pool](global::pool) or [pool_any](global::pool_any) and then store the pool
+//! somewhere. If you don't have anywhere to store the pool you can use a static
+//! [LazyLock](std::sync::LazyLock) for a truly global named pool. For example,
 //!
 //! ```no_run
 //! use std::{sync::LazyLock, collections::HashMap};
@@ -26,7 +27,7 @@
 //! type Widget = HashMap<usize, usize>;
 //!
 //! // create a global static widget pool that will accept up to 1024 widgets with
-//! // up to 64 elements of capacity
+//! // up to 64 elements of capacity each
 //! static WIDGETS: LazyLock<Pool<Widget>> = LazyLock::new(|| Pool::new(1024, 64));
 //!
 //! fn widget_maker() -> GPooled<Widget> {
@@ -48,7 +49,7 @@
 //! Local pools are significantly faster than global pools because they avoid
 //! most atomic operations. Local pools require that your container type
 //! implement the unsafe trait IsoPoolable, so they can't be used with all
-//! types. When they can be used they are quite easy,
+//! types.
 //!
 //! ```no_run
 //! use poolshark::local::LPooled;
@@ -74,8 +75,9 @@ pub mod global;
 pub mod local;
 pub mod pooled;
 
-/// This is the unique id of a location in the code. use the
-/// poolshark_derive::location_id!() macro to generate one
+/// A globally unique id for a source code position
+///
+/// use poolshark_derive::location_id!() macro to generate one
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LocationId(pub u16);
 
@@ -270,6 +272,8 @@ pub trait Poolable {
     }
 }
 
+/// Low level global pool trait for maximum control
+///
 /// Implementing this trait allows full low level control over where the pool
 /// pointer is stored. For example if you are pooling an allocated data
 /// structure, you could store the pool pointer in the allocation to keep the
@@ -301,10 +305,12 @@ pub unsafe trait RawPoolable: Sized {
     fn really_drop(self);
 }
 
-/// Trait for isomorphicly poolable objects. That is objects that can safely be
-/// pooled by memory layout and container type. For example two `HashMap`s,
-/// `HashMap<usize, usize>` and `HashMap<ArcStr, ArcStr>` are isomorphic, their
-/// memory allocations can be used interchangably so long as they are empty.
+/// Trait for isomorphicly poolable objects.
+///
+/// That is objects that can safely be pooled by memory layout and container
+/// type. For example two `HashMap`s, `HashMap<usize, usize>` and
+/// `HashMap<ArcStr, ArcStr>` are isomorphic, their memory allocations can be
+/// used interchangably so long as they are empty.
 pub unsafe trait IsoPoolable: Poolable {
     /// # Getting the Layout Right
     ///
