@@ -165,8 +165,10 @@ pub fn insert<T: IsoPoolable>(mut t: T) -> Option<T> {
 }
 
 /// A zero size wrapper around locally pooled objects that manages Drop for you.
-/// If you have implemented IsoPooled on your object, you can just wrap it in
-/// a LPooled<T> and you should be done.
+/// an `LPooled` object will be returned to the thread local pool on whatever
+/// thread it is dropped. In most cases this is fine, but in specific cases
+/// (e.g. producer consumer patterns) using a [GPooled](crate::global::GPooled) will be
+/// more efficient.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LPooled<T: IsoPoolable>(ManuallyDrop<T>);
 
@@ -189,6 +191,8 @@ impl<T: IsoPoolable> Default for LPooled<T> {
 }
 
 impl<T: IsoPoolable> LPooled<T> {
+    /// take an object from the pool, or create one if the pool is empty. This
+    /// is the same as [Default::default]
     pub fn take() -> Self {
         Self(ManuallyDrop::new(take()))
     }

@@ -78,7 +78,7 @@ pub fn clear() {
     POOLS.with_borrow_mut(|pools| pools.clear())
 }
 
-/// Delete the thread local pool for the specified K, V and SIZE. This will
+/// Delete the thread local pool for the specified `T`. Note, this will
 /// happen automatically when the current thread dies.
 pub fn clear_type<T: IsoPoolable>() {
     POOLS.with_borrow_mut(|pools| {
@@ -88,10 +88,10 @@ pub fn clear_type<T: IsoPoolable>() {
     })
 }
 
-/// Set the pool size for this type. Pools that have already been created will
-/// not be resized, but new pools (on new threads) will use the specified size
-/// as their max size. If you wish to resize an existing pool you can first
-/// clear_type (or clear) and then set_size.
+/// Set the pool size for the global pools of `T`. Pools that have already been
+/// created will not be resized, but new pools (on new threads) will use the
+/// specified size as their max size. If you wish to resize an existing pool you
+/// can first clear_type (or clear) and then set_size.
 pub fn set_size<T: IsoPoolable>(max_pool_size: usize, max_element_capacity: usize) {
     if let Some(d) = T::DISCRIMINANT {
         SIZES
@@ -114,8 +114,9 @@ pub fn get_size<T: IsoPoolable>() -> Option<(usize, usize)> {
     })
 }
 
-/// Take a T from the pool, if there is no pool for T or there are no Ts pooled
-/// then create a new empty T. If no gobal pool can exist for T return an orphan.
+/// Take a `T` from the thread local global pool, if there is no pool for `T`j
+/// or there are no `T`s pooled then create a new empty `T`. If `T` has no
+/// discrimiant return an orphan.
 pub fn take<T: IsoPoolable>() -> GPooled<T> {
     with_pool(|pool| {
         pool.map(|p| p.take())
@@ -123,9 +124,11 @@ pub fn take<T: IsoPoolable>() -> GPooled<T> {
     })
 }
 
-/// Return a pointer to the global pool for types isomorphic t T, if one is
-/// possible. You can use get_size, set_size, clear and clear_type to control
-/// these global pools.
+/// Get a reference to the thread local global pool of `T`s if `T` has a
+/// discriminant. You can use [get_size], [set_size], [clear] and [clear_type]
+/// to control these global pools on the current thread. This function unlike
+/// [pool_any] does not require `T` to implement [Any], so you could use it to
+/// pool a type like `HashMap<&str, &str>`.
 pub fn pool<T: IsoPoolable>() -> Option<Pool<T>> {
     with_pool(|pool| pool.cloned())
 }
@@ -136,9 +139,9 @@ thread_local! {
 }
 
 /// Get a reference to a pool from the generic thread local pool set for any
-/// type that implements Any + Poolable. Note this is a different set of pools
-/// vs ones returned by `pool`. If your container type implements both
-/// IsoPoolable and Any then you can choose either of these two pool sets, it
+/// type that implements [Any] + [Poolable]. Note this is a different set of
+/// pools vs ones returned by [pool]. If your container type implements both
+/// [IsoPoolable] and [Any] then you can choose either of these two pool sets, it
 /// doesn't really matter for performance which one you choose as long as your
 /// choice is consistent.
 pub fn pool_any<T: Any + Poolable>(size: usize, max: usize) -> Pool<T> {
@@ -152,10 +155,10 @@ pub fn pool_any<T: Any + Poolable>(size: usize, max: usize) -> Pool<T> {
     })
 }
 
-/// Take a poolable type T that also implements Any from the generic thread
-/// local pool set. It is much more efficient to use `take` if your container
-/// type implements IsoPoolable, and even more efficent to use `pool` or
-/// `pool_any` and store the pool somewhere.
+/// Take a poolable type `T` that also implements [Any] from the generic thread
+/// local global pool set. It is much more efficient to use [take] if your container
+/// type implements [IsoPoolable], and even more efficent to use [pool] or
+/// [pool_any] and store the pool somewhere.
 pub fn take_any<T: Any + Poolable>(size: usize, max: usize) -> GPooled<T> {
     ANY_POOLS.with_borrow_mut(|pools| {
         pools
@@ -167,20 +170,23 @@ pub fn take_any<T: Any + Poolable>(size: usize, max: usize) -> GPooled<T> {
     })
 }
 
-/// A generic wrapper for globally pooled objects.
+/// A wrapper for globally pooled objects.
 ///
 /// Globally pooled objects differ from locally pooled objects because the
 /// glocal pools can be shared between threads. For example in the case of a
 /// producer thread producing objects and sending them to consumer threads an
-/// `LPooled` object would have no value. The dropped objects would just
-/// accumulate in the consumers and would never be available to the producer. In
-/// such a case a GPooled object would be useful because when dropped it will
-/// always return to the pool it was created from, in our case the producer,
-/// making it available for reuse.
+/// [LPooled](crate::local::LPooled) object would have no value. The dropped objects
+/// would just accumulate in the consumers and would never be available to the
+/// producer. In such a case a GPooled object would be useful because when
+/// dropped it will always return to the pool it was created from, in our case
+/// the producer, making it available for reuse.
 ///
 /// Conversely if your objects will mostly be produced and consumed on the same
-/// set of threads, and your containers can implement `IsoPooled` then consider
-/// using `LPooled` objects, as they are considerably faster.
+/// set of threads, and your containers can implement [IsoPoolable] then consider
+/// using [LPooled](crate::local::LPooled) objects, as they are considerably faster.
+///
+/// `GPooled` has an overhead of 1 machine work on the stack to store the pool
+/// pointer.
 #[derive(Clone)]
 pub struct GPooled<T: Poolable> {
     pool: ManuallyDrop<WeakPool<Self>>,
@@ -262,7 +268,7 @@ impl<T: Poolable + Hash> Hash for GPooled<T> {
 }
 
 impl<T: Poolable> GPooled<T> {
-    /// Creates a `Pooled` that isn't connected to any pool. E.G. for
+    /// Creates a `GPooled` that isn't connected to any pool. E.G. for
     /// branches where you know a given `Pooled` will always be empty.
     pub fn orphan(t: T) -> Self {
         Self {
@@ -271,7 +277,7 @@ impl<T: Poolable> GPooled<T> {
         }
     }
 
-    /// assign the `Pooled` to the specified pool. When it is dropped
+    /// assign the `GPooled` to the specified pool. When it is dropped
     /// it will be placed in `pool` instead of the pool it was
     /// originally allocated from. If an orphan is assigned a pool it
     /// will no longer be orphaned.
@@ -416,7 +422,7 @@ impl<T: RawPoolable> RawPool<T> {
         WeakPool(Arc::downgrade(&self.0))
     }
 
-    /// creates a new `Pool<T>`. this pool will retain up to
+    /// creates a new `RawPool<T>`. this pool will retain up to
     /// `max_capacity` objects of size less than or equal to
     /// max_elt_capacity. Objects larger than max_elt_capacity will be
     /// deallocated immediatly.

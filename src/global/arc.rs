@@ -101,10 +101,12 @@ macro_rules! impl_arc {
                 }
             }
 
+            /// return the strong count of the arc
             pub fn strong_count(&self) -> usize {
                 $inner::strong_count(&*self.inner)
             }
 
+            /// return the arc as a pointer
             pub fn as_ptr(&self) -> *const (WeakPool<Self>, T) {
                 $inner::as_ptr(&*self.inner)
             }
@@ -147,12 +149,14 @@ use std::sync::{Arc as ArcInner, Weak as WeakInner};
 impl_arc!(Arc, ArcInner, |a| ArcInner::get_mut(a).is_some());
 
 impl<T: Poolable + Clone> Arc<T> {
+    /// downgrade the arc to a weak pointer
     pub fn downgrade(&self) -> Weak<T> {
         Weak {
             inner: ArcInner::downgrade(&*self.inner),
         }
     }
 
+    /// return the weak count of the arc
     pub fn weak_count(&self) -> usize {
         ArcInner::weak_count(&*self.inner)
     }

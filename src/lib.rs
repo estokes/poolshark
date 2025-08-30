@@ -1,22 +1,23 @@
-//! Recycle expensive to construct/destruct objects
-//!
 //! Memory pooling is a simple idea, malloc and free can be expensive and so can
 //! object initialization, if you malloc and init an object that is used
 //! temporarially, and it's likely you'll want to use a similar object again in
 //! the future, then don't throw all that work away by freeing it, stick it
-//! somewhere until you need it again.
+//! somewhere until you need it again. This library implements two different
+//! flavors of object pooling, local pooling and global pooling.
 //!
-//! There are two different types of pools implemented by this library, global
-//! pools and local pools. Global pools share objects between threads (see
-//! [global::GPooled]), an object taken from a global pool will always return to
-//! the pool it was taken from. Use this if objects are usually dropped on a
-//! different thread than they are created on, for example a producer thread
-//! creating objects for consumer threads. There are several different ways to
-//! use global pools. You can use [global::take] or [global::take_any] to just
-//! take objects from thread local global pools. If you need better performance
-//! you can use [global::pool] or [global::pool_any] and then store the pool
-//! somewhere. If you don't have anywhere to store the pool you can use a static
-//! [std::sync::LazyLock] for a truly global named pool. For example,
+//! ## Global Pooling
+//!
+//! Global pools share objects between threads (see [GPooled](global::GPooled)),
+//! an object taken from a global pool will always return to the pool it was
+//! taken from. Use this if objects are usually dropped on a different thread
+//! than they are created on, for example a producer thread creating objects for
+//! consumer threads. There are several different ways to use global pools. You
+//! can use [take](global::take) or [take_any](global::take_any) to just take
+//! objects from thread local global pools. If you need better performance you
+//! can use [pool](global::pool) or [pool_any](global::pool_any) and then store
+//! the pool somewhere. If you don't have anywhere to store the pool you can use
+//! a static [LazyLock](std::sync::LazyLock) for a truly global named pool. For
+//! example,
 //!
 //! ```no_run
 //! use std::{sync::LazyLock, collections::HashMap};
@@ -39,7 +40,9 @@
 //! }
 //! ```
 //!
-//! Local pools (see [local::LPooled]) always return dropped objects to a thread
+//! ## Local Pooling
+//!
+//! Local pools (see [LPooled](local::LPooled)) always return dropped objects to a thread
 //! local structure on the thread that drops them. If your objects are produced
 //! and dropped on the same set of threads then a local pool is a good choice.
 //! Local pools are significantly faster than global pools because they avoid
@@ -97,7 +100,7 @@ impl ULayout {
         let l = Layout::new::<T>();
         let size = l.size();
         let align = l.align();
-        if size >= 0x0FFF {
+        if size > 0x0FFF {
             return None;
         }
         if align > 0x10 {
@@ -105,32 +108,64 @@ impl ULayout {
         }
         Some(Self(((size << 4) | (0x0F & align)) as u16))
     }
-
-    const fn new_size<const SIZE: usize>() -> Option<Self> {
-        // slight abuse of ULayout ...
-        if SIZE > 0xFFFF {
-            return None;
-        }
-        Some(ULayout(SIZE as u16))
-    }
 }
 
+/// Type describing the layout, alignment, and type of a container
+///
+/// `Discriminant` is central to the safety and performance of local pooling. It
+/// describes 2 things in just 8 bytes.
+///
+/// - The unique location in the source code of the implementation of
+/// [IsoPoolable]. This is accomplished by a proc macro that generates a global
+/// table of unique location ids for cross crate source code locations. This
+/// unique id ensures that different container types can't be mixed in the same
+/// pool.
+///
+/// - The layout and alignment of all the type parameters of the container, up
+/// to 2 are supported. If your container has more that two type parameters
+/// then you can't locally pool it, and you can't implement [IsoPoolable]. If you
+/// do, you may caused UB.
+///
+/// In order to squeeze all this information into just 8 bytes there are some
+/// limitations.
+///
+/// - You can't have more than 0xFFFF implementations of [IsoPoolable] in the
+/// same project. This includes all the crates depended on by the project.
+///
+/// - Your type parameters must have size <= 0x0FFF bytes and alignment <= 0xF.
+///
+/// - const SIZE parameters must be < 0xFFFF.
+///
+/// If any of these constraints are violated the `Discriminant` constructors
+/// will return `None`. If you desire you may panic at that point to cause a
+/// compile error. If you do not panic and instead leave `DISCRIMINANT` as
+/// `None` then local pool operations on that type will work just fine, but
+/// nothing will be pooled. Objects will be freed when they are dropped and
+/// [take](local::take) will allocate new objects each time it is called.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Discriminant {
     container: LocationId,
-    elements: [ULayout; 3],
+    elements: [ULayout; 2],
+    size: u16,
 }
 
 impl Discriminant {
+    const NO_SIZE: u16 = 0xFFFF;
+
+    /// build a discriminant for a type with no type variables (just a location
+    /// id). Always returns Some
     pub const fn new(id: LocationId) -> Option<Discriminant> {
         Some(Discriminant {
             container: id,
-            elements: [ULayout::empty(); 3],
+            elements: [ULayout::empty(); 2],
+            size: Self::NO_SIZE,
         })
     }
 
+    /// build a discriminant for a type with 1 type variable `T`. Return `None` if
+    /// `T` is too large to fit.
     pub const fn new_p1<T>(id: LocationId) -> Option<Discriminant> {
-        let mut elements = [ULayout::empty(); 3];
+        let mut elements = [ULayout::empty(); 2];
         match ULayout::new::<T>() {
             Some(l) => elements[0] = l,
             None => return None,
@@ -138,27 +173,32 @@ impl Discriminant {
         Some(Discriminant {
             container: id,
             elements,
+            size: Self::NO_SIZE,
         })
     }
 
+    /// build a discriminant for a type with 1 type variable `T` and a const
+    /// `SIZE`. Return `None` if `T` or `SIZE` are too large to fit.
     pub const fn new_p1_size<T, const SIZE: usize>(id: LocationId) -> Option<Discriminant> {
-        let mut elements = [ULayout::empty(); 3];
+        let mut elements = [ULayout::empty(); 2];
         match ULayout::new::<T>() {
             Some(l) => elements[0] = l,
             None => return None,
         }
-        match ULayout::new_size::<SIZE>() {
-            Some(l) => elements[1] = l,
-            None => return None,
+        if SIZE >= 0xFFFF {
+            return None;
         }
         Some(Discriminant {
             container: id,
             elements,
+            size: SIZE as u16,
         })
     }
 
+    /// build a discriminant for a type with two type variables `T` and `U`.
+    /// Return `None` if either `T` or `U` are too large to fit
     pub const fn new_p2<T, U>(id: LocationId) -> Option<Discriminant> {
-        let mut elements = [ULayout::empty(); 3];
+        let mut elements = [ULayout::empty(); 2];
         match ULayout::new::<T>() {
             Some(l) => elements[0] = l,
             None => return None,
@@ -170,11 +210,15 @@ impl Discriminant {
         Some(Discriminant {
             container: id,
             elements,
+            size: Self::NO_SIZE,
         })
     }
 
+    /// build a discriminant for a type with two type variables `T` and `U` and
+    /// a const SIZE. Return `None` if any of the parameters are too large to
+    /// fit.
     pub const fn new_p2_size<T, U, const SIZE: usize>(id: LocationId) -> Option<Discriminant> {
-        let mut elements = [ULayout::empty(); 3];
+        let mut elements = [ULayout::empty(); 2];
         match ULayout::new::<T>() {
             Some(l) => elements[0] = l,
             None => return None,
@@ -183,33 +227,13 @@ impl Discriminant {
             Some(l) => elements[1] = l,
             None => return None,
         }
-        match ULayout::new_size::<SIZE>() {
-            Some(l) => elements[2] = l,
-            None => return None,
+        if SIZE >= 0xFFFF {
+            return None;
         }
         Some(Discriminant {
             container: id,
             elements,
-        })
-    }
-
-    pub const fn new_p3<T, U, V>(id: LocationId) -> Option<Discriminant> {
-        let mut elements = [ULayout::empty(); 3];
-        match ULayout::new::<T>() {
-            Some(l) => elements[0] = l,
-            None => return None,
-        }
-        match ULayout::new::<U>() {
-            Some(l) => elements[1] = l,
-            None => return None,
-        }
-        match ULayout::new::<V>() {
-            Some(l) => elements[2] = l,
-            None => return None,
-        }
-        Some(Discriminant {
-            container: id,
-            elements,
+            size: SIZE as u16,
         })
     }
 }
@@ -233,9 +257,7 @@ pub trait Poolable {
     fn empty() -> Self;
 
     /// empty the collection and reset it to it's default state so it
-    /// can be put back in the pool. This will be called when the
-    /// Pooled wrapper has been dropped and the object is being put
-    /// back in the pool.
+    /// can be put back in the pool.
     fn reset(&mut self);
 
     /// return the capacity of the collection
@@ -248,24 +270,20 @@ pub trait Poolable {
     }
 }
 
-/// Implementing this trait allows full low level control over where
-/// the pool pointer is stored. For example if you are pooling an
-/// allocated data structure, you could store the pool pointer in the
-/// allocation to keep the size of the handle struct to a
-/// minimum. E.G. you're pooling a ThinArc. Or, if you have a static
-/// global pool, then you would not need to keep a pool pointer at
-/// all.
+/// Implementing this trait allows full low level control over where the pool
+/// pointer is stored. For example if you are pooling an allocated data
+/// structure, you could store the pool pointer in the allocation to keep the
+/// size of the handle struct to a minimum. E.G. you're pooling a
+/// [triomphe::ThinArc]. Or, if you have a static global pool, then you would
+/// not need to keep a pool pointer at all.
 ///
 /// The object's drop implementation should return the object to the
 /// pool instead of deallocating it
 ///
-/// Implementing this trait correctly is extremely tricky, and
-/// requires unsafe code in almost all cases, therefore it is marked
-/// as unsafe
+/// Implementing this trait correctly is extremely tricky, and requires unsafe
+/// code, therefore it is marked as unsafe.
 ///
-/// Most of the time you should use the `Pooled` wrapper as it's
-/// required trait is much eaiser to implement and there is no
-/// practial place to put the pool pointer besides on the stack.
+/// Most of the time you should use the [GPooled](global::GPooled) wrapper.
 pub unsafe trait RawPoolable: Sized {
     /// allocate a new empty object and set it's pool pointer to `pool`
     fn empty(pool: WeakPool<Self>) -> Self;
@@ -284,24 +302,22 @@ pub unsafe trait RawPoolable: Sized {
 }
 
 /// Trait for isomorphicly poolable objects. That is objects that can safely be
-/// pooled by memory layout and alignment.
+/// pooled by memory layout and container type. For example two `HashMap`s,
+/// `HashMap<usize, usize>` and `HashMap<ArcStr, ArcStr>` are isomorphic, their
+/// memory allocations can be used interchangably so long as they are empty.
 pub unsafe trait IsoPoolable: Poolable {
-    /// Build a discriminant for Self. The discriminant container id must be
-    /// unique for the container type, for example, Vec must always have a
-    /// different container id from HashMap. You can use the macro
-    /// `container_id_once` to ensure this with low overhead.
-    ///
     /// # Getting the Layout Right
     ///
     /// You must pass every type variable that can effect the layout of the
     /// container's inner allocation to Discriminant. Take HashMap as an
-    /// example. If you build the discriminant from HashMap<K, V> it will always
-    /// be the same for any K, V, because the HashMap struct doesn't actually
-    /// contain K and V, just a pointer to a collection of K, V. If you
+    /// example. If you build the discriminant such as
+    /// `Discriminant::new_p1::<HashMap<K, V>>()` it would always be the same
+    /// for any `K`, `V`, because the `HashMap` struct doesn't actually contain
+    /// any `K`s or `V`s, just a pointer to some `K`s and `V`s. If you
     /// implemented discriminant this way it would cause your program to crash
-    /// when you tried to pool two HashMap's with K, V types that aren't
-    /// isomorphic. Instead you must pass K and V to Discriminant::new_p2::<K,
-    /// V>() to get the real layout of the inner type of HashMap. This is why
+    /// when you tried to pool two HashMap's with `K`, `V` types that aren't
+    /// isomorphic. Instead you must pass `K` and `V` to `Discriminant::new_p2::<K,
+    /// V>()` to get the real layout of the inner collection of `HashMap`. This is why
     /// this trait is unsafe to implement, if you aren't careful when you build
     /// the discriminant very bad things will happen.
     ///
@@ -315,15 +331,12 @@ pub unsafe trait IsoPoolable: Poolable {
     ///
     /// # Why Return Option
     ///
-    /// Discriminant is a compressed version of layout that squeezes 3 layouts
-    /// and a container type into 8 bytes. As such there are some layouts that
-    /// are too big to fit in it, and the constructor will return None in those
-    /// cases. For example if you want to pool a Vec<T> and T's size is greater
-    /// then 0x0FFF (4K) then Discriminant will return None, also if your
-    /// alignment is greater then 0xF (16) Discriminant will return None. For
-    /// the purpose of pooling containers of small objects these tradeoffs
-    /// seemed worth it. if you must pool containers of huge objects like this,
-    /// you can use the thread safe pools.
+    /// Discriminant is a compressed version of layout that squeezes 2 layouts a
+    /// size and a container type into 8 bytes. As such there are some layouts
+    /// that are too big to fit in it, and the constructor will return None in
+    /// those cases. For the purpose of pooling containers of small objects
+    /// these tradeoffs seemed worth it. If you must pool containers of huge
+    /// objects like this, you can use the thread safe pools.
     ///
     /// # Arc
     ///
