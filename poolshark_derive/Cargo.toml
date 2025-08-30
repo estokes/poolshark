@@ -7,7 +7,6 @@ edition = "2024"
 keywords = ["pool", "recycle", "object-pool"]
 license = "MIT"
 name = "poolshark_derive"
-readme = "README.md"
 repository = "https://github.com/estokes/poolshark"
 version = "0.1.0"
 
