@@ -230,6 +230,16 @@ impl<T: IsoPoolable> Default for GPooled<T> {
     }
 }
 
+impl<T: IsoPoolable> GPooled<T> {
+    pub fn take() -> Self {
+        take()
+    }
+
+    pub fn take_sz(max: usize, max_elements: usize) -> Self {
+        take_sz(max, max_elements)
+    }
+}
+
 unsafe impl<T: Poolable> RawPoolable for GPooled<T> {
     fn empty(pool: WeakPool<Self>) -> Self {
         Self {

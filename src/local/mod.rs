@@ -233,6 +233,10 @@ impl<T: IsoPoolable> LPooled<T> {
         Self(ManuallyDrop::new(take()))
     }
 
+    pub fn take_sz(max: usize, max_elements: usize) -> Self {
+        Self(ManuallyDrop::new(take_sz(max, max_elements)))
+    }
+
     /// detach the object from the pool, returning it. the detached object will
     /// not be returned to the pool when dropped. If you later decide you'd like
     /// to reverse this decision you can call Pooled::from on T.
