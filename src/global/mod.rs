@@ -35,7 +35,7 @@ static SIZES: LazyLock<Mutex<FxHashMap<Discriminant, (usize, usize)>>> =
 // 1. Containers are reset before being returned to pools, so they contain no values
 // 2. We only reuse pools for types with identical memory layouts (same size/alignment via Discriminant)
 // 3. The Opaque wrapper ensures proper cleanup when the thread local is destroyed
-fn with_pool<T, R, F>(f: F) -> R
+fn with_pool<T, R, F>(sizes: Option<(usize, usize)>, f: F) -> R
 where
     T: IsoPoolable,
     F: FnOnce(Option<&Pool<T>>) -> R,
@@ -49,12 +49,14 @@ where
         Ok(mut pools) => match T::DISCRIMINANT {
             Some(d) => {
                 let pool = pools.entry(d).or_insert_with(|| {
-                    let (size, cap) = SIZES
-                        .lock()
-                        .unwrap()
-                        .get(&d)
-                        .map(|(s, c)| (*s, *c))
-                        .unwrap_or(DEFAULT_SIZES);
+                    let (size, cap) = sizes.unwrap_or_else(|| {
+                        SIZES
+                            .lock()
+                            .unwrap()
+                            .get(&d)
+                            .map(|(s, c)| (*s, *c))
+                            .unwrap_or(DEFAULT_SIZES)
+                    });
                     let b = Box::new(Pool::<T>::new(size, cap));
                     let t = Box::into_raw(b) as *mut ();
                     let drop = Some(Box::new(|t: *mut ()| unsafe {
@@ -115,14 +117,26 @@ pub fn get_size<T: IsoPoolable>() -> Option<(usize, usize)> {
     })
 }
 
+fn take_inner<T: IsoPoolable>(sizes: Option<(usize, usize)>) -> GPooled<T> {
+    with_pool(sizes, |pool| {
+        pool.map(|p| p.take())
+            .unwrap_or_else(|| GPooled::orphan(T::empty()))
+    })
+}
+
 /// Take a `T` from the thread local global pool, if there is no pool for `T`j
 /// or there are no `T`s pooled then create a new empty `T`. If `T` has no
 /// discrimiant return an orphan.
 pub fn take<T: IsoPoolable>() -> GPooled<T> {
-    with_pool(|pool| {
-        pool.map(|p| p.take())
-            .unwrap_or_else(|| GPooled::orphan(T::empty()))
-    })
+    take_inner(None)
+}
+
+/// Take a `T` from the thread local global pool, if there is no pool for `T`j
+/// or there are no `T`s pooled then create a new empty `T`. If `T` has no
+/// discrimiant return an orphan. Also set the pool sizes for this type if they have
+/// not already been set.
+pub fn take_sz<T: IsoPoolable>(max: usize, max_elements: usize) -> GPooled<T> {
+    take_inner(Some((max, max_elements)))
 }
 
 /// Get a reference to the thread local global pool of `T`s if `T` has a
@@ -131,7 +145,17 @@ pub fn take<T: IsoPoolable>() -> GPooled<T> {
 /// [pool_any] does not require `T` to implement [Any], so you could use it to
 /// pool a type like `HashMap<&str, &str>`.
 pub fn pool<T: IsoPoolable>() -> Option<Pool<T>> {
-    with_pool(|pool| pool.cloned())
+    with_pool(None, |pool| pool.cloned())
+}
+
+/// Get a reference to the thread local global pool of `T`s if `T` has a
+/// discriminant. You can use [get_size], [set_size], [clear] and [clear_type]
+/// to control these global pools on the current thread. This function unlike
+/// [pool_any] does not require `T` to implement [Any], so you could use it to
+/// pool a type like `HashMap<&str, &str>`. Also set the pool sizes for this
+/// type if they have not already been set
+pub fn pool_sz<T: IsoPoolable>(max: usize, max_elements: usize) -> Option<Pool<T>> {
+    with_pool(Some((max, max_elements)), |pool| pool.cloned())
 }
 
 thread_local! {

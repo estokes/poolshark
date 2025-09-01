@@ -59,7 +59,7 @@ static SIZES: LazyLock<Mutex<FxHashMap<Discriminant, (usize, usize)>>> =
 // 1. Containers are reset before being returned to pools, so they contain no values
 // 2. We only reuse pools for types with identical memory layouts (same size/alignment via Discriminant)
 // 3. The Opaque wrapper ensures proper cleanup when the thread local is destroyed
-fn with_pool<T, R, F>(f: F) -> R
+fn with_pool<T, R, F>(sizes: Option<(usize, usize)>, f: F) -> R
 where
     T: IsoPoolable,
     F: FnOnce(Option<&mut Pool<T>>) -> R,
@@ -73,12 +73,14 @@ where
         Ok(mut pools) => match T::DISCRIMINANT {
             Some(d) => {
                 let pool = pools.entry(d).or_insert_with(|| {
-                    let (size, cap) = SIZES
-                        .lock()
-                        .unwrap()
-                        .get(&d)
-                        .map(|(s, c)| (*s, *c))
-                        .unwrap_or(DEFAULT_SIZES);
+                    let (size, cap) = sizes.unwrap_or_else(|| {
+                        SIZES
+                            .lock()
+                            .unwrap()
+                            .get(&d)
+                            .map(|(s, c)| (*s, *c))
+                            .unwrap_or(DEFAULT_SIZES)
+                    });
                     let b = Box::new(Pool::<T>::new(size, cap));
                     let t = Box::into_raw(b) as *mut ();
                     let drop = Some(Box::new(|t: *mut ()| unsafe {
@@ -139,17 +141,25 @@ pub fn get_size<T: IsoPoolable>() -> Option<(usize, usize)> {
     })
 }
 
+fn take_inner<T: IsoPoolable>(sizes: Option<(usize, usize)>) -> T {
+    with_pool(sizes, |pool| pool.and_then(|p| p.data.pop())).unwrap_or_else(|| T::empty())
+}
+
 /// Take a T from the pool, if there is no pool for T or there are no Ts pooled
 /// then create a new empty T
 pub fn take<T: IsoPoolable>() -> T {
-    with_pool(|pool| pool.and_then(|p| p.data.pop())).unwrap_or_else(|| T::empty())
+    take_inner(None)
 }
 
-/// Insert a T into the pool. If there is no space in the pool available to hold
-/// T then return it, otherwise return None. Does not reset T, the caller is
-/// responsible for resetting T. If you do not, horrible things can happen.
-pub unsafe fn insert_raw<T: IsoPoolable>(t: T) -> Option<T> {
-    with_pool(|pool| match pool {
+/// Take a T from the pool, if there is no pool for T or there are no Ts pooled
+/// then create a new empty T. Configure the max size and max_elt size of the
+/// pool if it has not already been created.
+pub fn take_sz<T: IsoPoolable>(max: usize, max_elt: usize) -> T {
+    take_inner(Some((max, max_elt)))
+}
+
+unsafe fn insert_raw_inner<T: IsoPoolable>(sizes: Option<(usize, usize)>, t: T) -> Option<T> {
+    with_pool(sizes, |pool| match pool {
         Some(pool) if pool.data.len() < pool.max && t.capacity() <= pool.max_capacity => {
             pool.data.push(t);
             None
@@ -159,11 +169,35 @@ pub unsafe fn insert_raw<T: IsoPoolable>(t: T) -> Option<T> {
 }
 
 /// Insert a T into the pool. If there is no space in the pool available to hold
+/// T then return it, otherwise return None. Does not reset T, the caller is
+/// responsible for resetting T. If you do not, horrible things can happen.
+pub unsafe fn insert_raw<T: IsoPoolable>(t: T) -> Option<T> {
+    unsafe { insert_raw_inner(None, t) }
+}
+
+/// Insert a T into the pool. If there is no space in the pool available to hold
+/// T then return it, otherwise return None. Does not reset T, the caller is
+/// responsible for resetting T. If you do not, horrible things can happen. Also
+/// set the max pool size and max_elt size if the pool has not been initialized
+/// yet.
+pub unsafe fn insert_raw_sz<T: IsoPoolable>(max: usize, max_elt: usize, t: T) -> Option<T> {
+    unsafe { insert_raw_inner(Some((max, max_elt)), t) }
+}
+
+/// Insert a T into the pool. If there is no space in the pool available to hold
 /// T then return it, otherwise return None. T will be reset before it is
 /// inserted into the pool. Reset must ensure that T is EMPTY.
 pub fn insert<T: IsoPoolable>(mut t: T) -> Option<T> {
     t.reset();
     unsafe { insert_raw(t) }
+}
+
+/// Insert a T into the pool. If there is no space in the pool available to hold
+/// T then return it, otherwise return None. T will be reset before it is
+/// inserted into the pool. Reset must ensure that T is EMPTY.
+pub fn insert_sz<T: IsoPoolable>(max: usize, max_elt: usize, mut t: T) -> Option<T> {
+    t.reset();
+    unsafe { insert_raw_inner(Some((max, max_elt)), t) }
 }
 
 /// A zero size wrapper around locally pooled objects that manages Drop for you.
