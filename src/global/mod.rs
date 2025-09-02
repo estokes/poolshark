@@ -240,6 +240,12 @@ impl<T: IsoPoolable> GPooled<T> {
     }
 }
 
+impl<T: IsoPoolable + Extend<E>, E> Extend<E> for GPooled<T> {
+    fn extend<I: IntoIterator<Item = E>>(&mut self, iter: I) {
+        self.object.extend(iter)
+    }
+}
+
 unsafe impl<T: Poolable> RawPoolable for GPooled<T> {
     fn empty(pool: WeakPool<Self>) -> Self {
         Self {

@@ -315,3 +315,9 @@ impl<'de, T: IsoPoolable + DeserializeOwned + 'static> Deserialize<'de> for LPoo
         <T as Deserialize>::deserialize_in_place(deserializer, &mut place.0)
     }
 }
+
+impl<T: IsoPoolable + Extend<E>, E> Extend<E> for LPooled<T> {
+    fn extend<I: IntoIterator<Item = E>>(&mut self, iter: I) {
+        self.0.extend(iter)
+    }
+}
