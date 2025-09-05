@@ -5,7 +5,6 @@ use std::{
     collections::BTreeMap,
     fs::OpenOptions,
     io::{self, BufRead, BufReader, Seek, Write},
-    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
 };
 
@@ -53,7 +52,7 @@ impl BuildEnv {
                     t.crate_name = String::from_utf8_lossy(
                         dir.file_name()
                             .expect("could not find crate name")
-                            .as_bytes(),
+                            .as_encoded_bytes(),
                     )
                     .into_owned();
                 }
