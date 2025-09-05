@@ -9,7 +9,7 @@ license = "MIT"
 name = "poolshark"
 readme = "README.md"
 repository = "https://github.com/estokes/poolshark"
-version = "0.2.3"
+version = "0.2.4"
 
 [features]
 default = ["triomphe", "indexmap", "serde"]
@@ -25,4 +25,4 @@ indexmap = { version = "2", optional = true }
 serde_derive = { version = "1", optional = true }
 serde = { version = "1", optional = true }
 triomphe = { version = "0.1", optional = true }
-poolshark_derive = { version = "0.1", path = "poolshark_derive" }
+poolshark_derive = { version = "0.1.1", path = "poolshark_derive" }
