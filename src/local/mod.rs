@@ -321,3 +321,11 @@ impl<T: IsoPoolable + Extend<E>, E> Extend<E> for LPooled<T> {
         self.0.extend(iter)
     }
 }
+
+impl<T: IsoPoolable + Extend<E>, E> FromIterator<E> for LPooled<T> {
+    fn from_iter<I: IntoIterator<Item = E>>(iter: I) -> Self {
+        let mut t = Self::take();
+        t.extend(iter);
+        t
+    }
+}
