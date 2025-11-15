@@ -63,8 +63,8 @@ use std::{collections::HashSet, hash::Hash};
 // - if deduping a vec that is bigger than any previously seen
 // - if deduping a vec that is bigger than the max length allowed in the pool
 fn unsorted_dedup_stable<T: Hash + Eq>(v: &mut Vec<T>) {
-    let mut set: LPooled<HashSet<&T>> = LPooled::take(); // take set from the pool or allocate it
-    let mut retain: LPooled<Vec<bool>> = LPooled::take(); // take retain from the pool or allocate it
+    let mut set: LPooled<HashSet<&T>> = LPooled::take(); // take set from the pool
+    let mut retain: LPooled<Vec<bool>> = LPooled::take(); // take retain from the pool
     for t in v.iter() {
         retain.push(set.insert(t))
     }
