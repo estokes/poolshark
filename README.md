@@ -11,7 +11,7 @@ IndexMap and triomphe::Arc.
 - **Predictable performance**: Consistent behavior across platforms, independent of allocator quality
 - **Low-cost abstraction**: Local pools have performance similar to thread_local! with simpler ergonomics
 - **Flexible**: Choose between fast thread-local pools or lock-free cross-thread pools
-- **It's fast**: View the [benchmarks](docs/report/index.html)
+- **It's fast**: View the [benchmarks](https://estokes.github.io/poolshark/report/index.html)
 
 ## Installation
 
