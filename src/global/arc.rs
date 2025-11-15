@@ -1,9 +1,29 @@
+//! Poolable Arc types that reduce allocation overhead.
+//!
+//! This module provides drop-in replacements for `std::sync::Arc` and `triomphe::Arc`
+//! that pool their allocations. These are useful when you frequently create and destroy
+//! Arc instances with similar contents.
+//!
+//! # Example
+//!
+//! ```
+//! use poolshark::global::arc::Arc;
+//! use poolshark::global::RawPool;
+//!
+//! let pool: RawPool<Arc<String>> = RawPool::new(1024, 1);
+//! let arc1 = Arc::new(&pool, "hello".to_string());
+//! let arc2 = arc1.clone();  // Normal Arc cloning
+//! drop(arc1);
+//! drop(arc2);  // Returns to pool when last reference is dropped
+//! ```
+
 use super::{Poolable, RawPool, RawPoolable, WeakPool};
 use core::fmt;
 use std::{cmp::Eq, fmt::Debug, hash::Hash, mem::ManuallyDrop, ops::Deref, ptr};
 
 macro_rules! impl_arc {
-    ($name:ident, $inner:ident, $uniq:expr) => {
+    ($name:ident, $inner:ident, $uniq:expr, $doc:expr) => {
+        #[doc = $doc]
         #[derive(Clone)]
         pub struct $name<T: Poolable> {
             inner: ManuallyDrop<$inner<(WeakPool<Self>, T)>>,
@@ -84,7 +104,9 @@ macro_rules! impl_arc {
         }
 
         impl<T: Poolable> $name<T> {
-            /// allocate a new arc from the specified pool and return it containing v
+            /// Allocate a new arc from the specified pool.
+            ///
+            /// Returns an arc containing `v`.
             pub fn new(pool: &RawPool<Self>, v: T) -> Self {
                 let mut t = pool.take();
                 // values in the pool are guaranteed to be unique
@@ -92,8 +114,9 @@ macro_rules! impl_arc {
                 t
             }
 
-            /// if the Arc is unique, get a mutable pointer to the inner T,
-            /// otherwise return None
+            /// Get a mutable reference to the inner value if the Arc is unique.
+            ///
+            /// Returns `None` if the Arc is not unique (strong_count > 1).
             pub fn get_mut(&mut self) -> Option<&mut T> {
                 match $inner::get_mut(&mut *self.inner) {
                     Some((_, t)) => Some(t),
@@ -101,18 +124,21 @@ macro_rules! impl_arc {
                 }
             }
 
-            /// return the strong count of the arc
+            /// Return the strong reference count of the arc.
             pub fn strong_count(&self) -> usize {
                 $inner::strong_count(&*self.inner)
             }
 
-            /// return the arc as a pointer
+            /// Return the arc as a raw pointer.
             pub fn as_ptr(&self) -> *const (WeakPool<Self>, T) {
                 $inner::as_ptr(&*self.inner)
             }
         }
 
         impl<T: Poolable + Clone> $name<T> {
+            /// Get a mutable reference to the inner value, cloning if necessary.
+            ///
+            /// If the Arc is not unique, this will clone the inner value.
             pub fn make_mut<'a>(&'a mut self) -> &'a mut T {
                 if let Some(p) =
                     $inner::get_mut(&mut self.inner).map(|p| p as *mut (WeakPool<Self>, T))
@@ -136,32 +162,73 @@ macro_rules! impl_arc {
 use triomphe::Arc as TArcInner;
 
 #[cfg(feature = "triomphe")]
-impl_arc!(TArc, TArcInner, TArcInner::is_unique);
+impl_arc!(
+    TArc,
+    TArcInner,
+    TArcInner::is_unique,
+    "A poolable Arc using `triomphe::Arc` internally.\n\n\
+     This is a lighter-weight alternative to [`Arc`] that uses the `triomphe` crate.\n\
+     It has the same pooling behavior but with less overhead.\n\n\
+     # Example\n\n\
+     ```\n\
+     use poolshark::global::arc::TArc;\n\
+     use poolshark::global::RawPool;\n\n\
+     let pool: RawPool<TArc<String>> = RawPool::new(1024, 1);\n\
+     let arc = TArc::new(&pool, \"hello\".to_string());\n\
+     ```"
+);
 
 #[cfg(feature = "triomphe")]
 impl<T: Poolable + Send + Sync> TArc<T> {
+    /// Check if this is the only reference to the inner value.
     pub fn is_unique(&self) -> bool {
         self.inner.is_unique()
     }
 }
 
 use std::sync::{Arc as ArcInner, Weak as WeakInner};
-impl_arc!(Arc, ArcInner, |a| ArcInner::get_mut(a).is_some());
+impl_arc!(
+    Arc,
+    ArcInner,
+    |a| ArcInner::get_mut(a).is_some(),
+    "A poolable drop-in replacement for `std::sync::Arc`.\n\n\
+     This Arc pools its allocations, reducing overhead when frequently creating and\n\
+     destroying Arc instances. When the last strong reference is dropped, the allocation\n\
+     is returned to the pool instead of being freed.\n\n\
+     # Example\n\n\
+     ```\n\
+     use poolshark::global::arc::Arc;\n\
+     use poolshark::global::RawPool;\n\n\
+     let pool: RawPool<Arc<String>> = RawPool::new(1024, 1);\n\
+     let arc1 = Arc::new(&pool, \"hello\".to_string());\n\
+     let arc2 = arc1.clone();  // Reference counting works normally\n\
+     drop(arc1);\n\
+     drop(arc2);  // Returns to pool when last reference drops\n\
+     ```\n\n\
+     # Differences from `std::sync::Arc`\n\n\
+     - Requires a pool to be created from\n\
+     - Returns to pool when dropped (if strong_count == 1)\n\
+     - Slightly larger memory footprint (stores pool pointer)"
+);
 
 impl<T: Poolable + Clone> Arc<T> {
-    /// downgrade the arc to a weak pointer
+    /// Downgrade the Arc to a weak pointer.
     pub fn downgrade(&self) -> Weak<T> {
         Weak {
             inner: ArcInner::downgrade(&*self.inner),
         }
     }
 
-    /// return the weak count of the arc
+    /// Return the weak reference count of the arc.
     pub fn weak_count(&self) -> usize {
         ArcInner::weak_count(&*self.inner)
     }
 }
 
+/// A weak reference to a poolable [`Arc`].
+///
+/// This is analogous to `std::sync::Weak` and can be upgraded to an `Arc`
+/// if the value still exists.
 pub struct Weak<T: Poolable> {
     inner: WeakInner<(WeakPool<Arc<T>>, T)>,
 }
@@ -175,16 +242,21 @@ impl<T: Poolable> Clone for Weak<T> {
 }
 
 impl<T: Poolable> Weak<T> {
+    /// Attempt to upgrade the weak pointer to an Arc.
+    ///
+    /// Returns `None` if the inner value has already been dropped.
     pub fn upgrade(&self) -> Option<Arc<T>> {
         WeakInner::upgrade(&self.inner).map(|inner| Arc {
             inner: ManuallyDrop::new(inner),
         })
     }
 
+    /// Return the strong reference count.
     pub fn strong_count(&self) -> usize {
         WeakInner::strong_count(&self.inner)
     }
 
+    /// Return the weak reference count.
     pub fn weak_count(&self) -> usize {
         WeakInner::weak_count(&self.inner)
     }

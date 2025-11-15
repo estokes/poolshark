@@ -1,27 +1,70 @@
-//! Thread local object pools
+//! Fast thread-local object pools.
 //!
-//! This is faster than the cross thread shared pool, at the cost of the
-//! following differences,
+//! Local pools are significantly faster than global pools because they avoid atomic
+//! operations. Objects are returned to the pool of whichever thread drops them, making
+//! this ideal for workloads where objects stay on the same thread or are evenly
+//! distributed across threads.
 //!
-//! - more memory may be used as pools are thread local, you cannot centrally
-//! share pooled objects
+//! # When to Use
 //!
-//! - an extra unsafe trait to implement
+//! Use local pools (the default choice) when:
+//! - Objects are created and dropped on the same thread
+//! - All threads allocate and free objects roughly equally
+//! - You want maximum performance
 //!
-//! - if an element is dropped on a different thread than it was allocated on
-//! then it will be returned to a different pool
+//! If you have a producer-consumer pattern where one thread creates and other threads
+//! consume, use [`crate::global`] pools instead.
 //!
-//! Still this is about as close as it gets to having your cake and also eating
-//! it. You get to pool objects with minimal atomics without making all your
-//! pooled objects !Send (which is what would happen if you tried to directly use a Vec).
+//! # Examples
+//!
+//! ## Basic usage
+//!
+//! ```
+//! use poolshark::local::LPooled;
+//! use std::collections::HashMap;
+//!
+//! let mut map: LPooled<HashMap<String, i32>> = LPooled::take();
+//! map.insert("key".to_string(), 42);
+//! // When dropped, map is cleared and returned to the thread-local pool
+//! ```
+//!
+//! ## Reusing allocations across function calls
+//!
+//! ```no_run
+//! use poolshark::local::LPooled;
+//! use std::collections::HashSet;
+//!
+//! fn process_batch(items: &[String]) -> LPooled<Vec<String>> {
+//!     // This HashSet will be reused across calls on the same thread
+//!     let mut seen: LPooled<HashSet<String>> = LPooled::take();
+//!     // vecs will be reused when the caller drops them
+//!     items.iter().filter(|s| seen.insert(s.to_string())).cloned().collect()
+//! }
+//! ```
+//!
+//! # How It Works
+//!
+//! - **Thread safety**: `LPooled<T>` is `Send + Sync` whenever `T` is `Send + Sync`, making it
+//!   safe to pass pooled objects between threads
+//! - When dropped, objects return to the pool of the dropping thread (not necessarily
+//!   the creating thread)
+//! - Pools are thread-local, so each thread maintains its own pool per layout
+//! - Types must implement [`crate::IsoPoolable`] (all standard containers already do)
+//! - If `T` and `U` have the same size and alignment then `LPooled<Vec<T>>` can be reused
+//!   as `LPooled<Vec<U>>`
+//! - References are allowed! `LPooled<Vec<&T>>` will work, and will
+//!   reuse any `Vec<&X>` where `&X` has the same size and alignment as `&T` (in
+//!   current rust that means there will be a pool for thin references and a
+//!   pool for fat references).
 
 use crate::{Discriminant, IsoPoolable, Opaque};
 use fxhash::FxHashMap;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     borrow::Borrow,
     cell::RefCell,
     collections::HashMap,
+    fmt::Display,
     hash::Hash,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
@@ -37,11 +80,7 @@ struct Pool<T: IsoPoolable> {
 
 impl<T: IsoPoolable> Pool<T> {
     fn new(max: usize, max_capacity: usize) -> Self {
-        Self {
-            max,
-            max_capacity,
-            data: Vec::with_capacity(max),
-        }
+        Self { max, max_capacity, data: Vec::with_capacity(max) }
     }
 }
 
@@ -99,14 +138,16 @@ where
     }
 }
 
-/// Clear all thread local pools on this thread. Note this will happen
-/// automatically when the thread dies.
+/// Clear all thread local pools on this thread.
+///
+/// Note this will happen automatically when the thread dies.
 pub fn clear() {
     POOLS.with_borrow_mut(|pools| pools.clear())
 }
 
-/// Delete the thread local pool for the specified K, V and SIZE. This will
-/// happen automatically when the current thread dies.
+/// Delete the thread local pool for the specified type.
+///
+/// This will happen automatically when the current thread dies.
 pub fn clear_type<T: IsoPoolable>() {
     POOLS.with_borrow_mut(|pools| {
         if let Some(d) = T::DISCRIMINANT {
@@ -115,29 +156,23 @@ pub fn clear_type<T: IsoPoolable>() {
     })
 }
 
-/// Set the pool size for this type. Pools that have already been created will
-/// not be resized, but new pools (on new threads) will use the specified size
-/// as their max size. If you wish to resize an existing pool you can first
-/// clear_type (or clear) and then set_size.
+/// Set the pool size for this type.
+///
+/// Pools that have already been created will not be resized, but new pools (on new threads)
+/// will use the specified size as their max size. If you wish to resize an existing pool you
+/// can first clear_type (or clear) and then set_size.
 pub fn set_size<T: IsoPoolable>(max_pool_size: usize, max_element_capacity: usize) {
     if let Some(d) = T::DISCRIMINANT {
-        SIZES
-            .lock()
-            .unwrap()
-            .insert(d, (max_pool_size, max_element_capacity));
+        SIZES.lock().unwrap().insert(d, (max_pool_size, max_element_capacity));
     }
 }
 
-/// get the max pool size and the max element capacity for a given type. If
-/// get_size returns None then the type will not be pooled.
+/// Get the max pool size and max element capacity for a given type.
+///
+/// If get_size returns None then the type will not be pooled.
 pub fn get_size<T: IsoPoolable>() -> Option<(usize, usize)> {
     T::DISCRIMINANT.map(|d| {
-        SIZES
-            .lock()
-            .unwrap()
-            .get(&d)
-            .map(|(s, c)| (*s, *c))
-            .unwrap_or(DEFAULT_SIZES)
+        SIZES.lock().unwrap().get(&d).map(|(s, c)| (*s, *c)).unwrap_or(DEFAULT_SIZES)
     })
 }
 
@@ -145,20 +180,25 @@ fn take_inner<T: IsoPoolable>(sizes: Option<(usize, usize)>) -> T {
     with_pool(sizes, |pool| pool.and_then(|p| p.data.pop())).unwrap_or_else(|| T::empty())
 }
 
-/// Take a T from the pool, if there is no pool for T or there are no Ts pooled
-/// then create a new empty T
+/// Take a T from the pool.
+///
+/// If there is no pool for T or there are no Ts pooled then create a new empty T.
 pub fn take<T: IsoPoolable>() -> T {
     take_inner(None)
 }
 
-/// Take a T from the pool, if there is no pool for T or there are no Ts pooled
-/// then create a new empty T. Configure the max size and max_elt size of the
-/// pool if it has not already been created.
+/// Take a T from the pool with custom pool sizes.
+///
+/// If there is no pool for T or there are no Ts pooled then create a new empty T.
+/// Configures the max size and max_elt size of the pool if it has not already been created.
 pub fn take_sz<T: IsoPoolable>(max: usize, max_elt: usize) -> T {
     take_inner(Some((max, max_elt)))
 }
 
-unsafe fn insert_raw_inner<T: IsoPoolable>(sizes: Option<(usize, usize)>, t: T) -> Option<T> {
+unsafe fn insert_raw_inner<T: IsoPoolable>(
+    sizes: Option<(usize, usize)>,
+    t: T,
+) -> Option<T> {
     with_pool(sizes, |pool| match pool {
         Some(pool) if pool.data.len() < pool.max && t.capacity() <= pool.max_capacity => {
             pool.data.push(t);
@@ -168,45 +208,97 @@ unsafe fn insert_raw_inner<T: IsoPoolable>(sizes: Option<(usize, usize)>, t: T) 
     })
 }
 
-/// Insert a T into the pool. If there is no space in the pool available to hold
-/// T then return it, otherwise return None. Does not reset T, the caller is
-/// responsible for resetting T. If you do not, horrible things can happen.
+/// Insert a T into the pool without resetting it.
+///
+/// If there is no space in the pool available to hold T then return it, otherwise return None.
+/// Does not reset T, the caller is responsible for resetting T. If you do not, horrible things can happen.
+///
+/// # Safety
+///
+/// The caller must ensure that T is properly reset before calling this function.
 pub unsafe fn insert_raw<T: IsoPoolable>(t: T) -> Option<T> {
     unsafe { insert_raw_inner(None, t) }
 }
 
-/// Insert a T into the pool. If there is no space in the pool available to hold
-/// T then return it, otherwise return None. Does not reset T, the caller is
-/// responsible for resetting T. If you do not, horrible things can happen. Also
-/// set the max pool size and max_elt size if the pool has not been initialized
-/// yet.
-pub unsafe fn insert_raw_sz<T: IsoPoolable>(max: usize, max_elt: usize, t: T) -> Option<T> {
+/// Insert a T into the pool without resetting it, with custom pool sizes.
+///
+/// If there is no space in the pool available to hold T then return it, otherwise return None.
+/// Does not reset T, the caller is responsible for resetting T. If you do not, horrible things can happen.
+/// Also sets the max pool size and max_elt size if the pool has not been initialized yet.
+///
+/// # Safety
+///
+/// The caller must ensure that T is properly reset before calling this function.
+pub unsafe fn insert_raw_sz<T: IsoPoolable>(
+    max: usize,
+    max_elt: usize,
+    t: T,
+) -> Option<T> {
     unsafe { insert_raw_inner(Some((max, max_elt)), t) }
 }
 
-/// Insert a T into the pool. If there is no space in the pool available to hold
-/// T then return it, otherwise return None. T will be reset before it is
-/// inserted into the pool. Reset must ensure that T is EMPTY.
+/// Insert a T into the pool.
+///
+/// If there is no space in the pool available to hold T then return it, otherwise return None.
+/// T will be reset before it is inserted into the pool. Reset must ensure that T is EMPTY.
 pub fn insert<T: IsoPoolable>(mut t: T) -> Option<T> {
     t.reset();
     unsafe { insert_raw(t) }
 }
 
-/// Insert a T into the pool. If there is no space in the pool available to hold
-/// T then return it, otherwise return None. T will be reset before it is
-/// inserted into the pool. Reset must ensure that T is EMPTY.
+/// Insert a T into the pool with custom pool sizes.
+///
+/// If there is no space in the pool available to hold T then return it, otherwise return None.
+/// T will be reset before it is inserted into the pool. Reset must ensure that T is EMPTY.
 pub fn insert_sz<T: IsoPoolable>(max: usize, max_elt: usize, mut t: T) -> Option<T> {
     t.reset();
     unsafe { insert_raw_inner(Some((max, max_elt)), t) }
 }
 
-/// A zero size wrapper around locally pooled objects that manages Drop for you.
-/// an `LPooled` object will be returned to the thread local pool on whatever
-/// thread it is dropped. In most cases this is fine, but in specific cases
-/// (e.g. producer consumer patterns) using a [GPooled](crate::global::GPooled) will be
-/// more efficient.
+/// A zero-cost wrapper for thread-local pooled objects.
+///
+/// `LPooled<T>` automatically returns objects to the thread-local pool when dropped.
+/// This is the recommended default for most use cases as it's faster than [`GPooled`](crate::global::GPooled).
+///
+/// # When to Use
+///
+/// - Default choice for pooling
+/// - Objects created and dropped on the same thread
+/// - Maximum performance is important
+///
+/// For producer-consumer patterns where one thread creates and other threads consume,
+/// use [`GPooled`](crate::global::GPooled) instead.
+///
+/// # Example
+///
+/// ``` no_run
+/// use poolshark::local::LPooled;
+/// use std::collections::HashMap;
+///
+/// fn process_request(data: &[(&str, i32)]) -> LPooled<HashMap<String, i32>> {
+///     // will reuse dropped HashMaps
+///     let mut map: LPooled<HashMap<String, i32>> = LPooled::take();
+///     for (k, v) in data {
+///         map.insert(k.to_string(), *v);
+///     }
+///     map
+/// }
+/// ```
+///
+/// # Behavior
+///
+/// - **Minimal overhead**: Same size as `T` on the stack, with thread-local lookup cost on drop and take
+/// - **Thread-safe**: Can be sent between threads (implements `Send + Sync` if `T` does)
+/// - **Drop behavior**: Returns to the pool of whichever thread drops it
+/// - **Automatic**: No manual pool management required
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LPooled<T: IsoPoolable>(ManuallyDrop<T>);
+
+impl<T: IsoPoolable + Display> Display for LPooled<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", &*self.0)
+    }
+}
 
 impl<T: IsoPoolable> Borrow<T> for LPooled<T> {
     fn borrow(&self) -> &T {
@@ -227,19 +319,23 @@ impl<T: IsoPoolable> Default for LPooled<T> {
 }
 
 impl<T: IsoPoolable> LPooled<T> {
-    /// take an object from the pool, or create one if the pool is empty. This
-    /// is the same as [Default::default]
+    /// Take an object from the pool, or create one if the pool is empty.
+    ///
+    /// This is the same as [Default::default].
     pub fn take() -> Self {
         Self(ManuallyDrop::new(take()))
     }
 
+    /// Take an object from the pool with custom pool sizes.
+    ///
+    /// Creates a new object if the pool is empty. Configures the pool sizes if not already set.
     pub fn take_sz(max: usize, max_elements: usize) -> Self {
         Self(ManuallyDrop::new(take_sz(max, max_elements)))
     }
 
-    /// detach the object from the pool, returning it. the detached object will
-    /// not be returned to the pool when dropped. If you later decide you'd like
-    /// to reverse this decision you can call Pooled::from on T.
+    /// Detach the object from the pool, returning the inner value.
+    ///
+    /// The detached object will not be returned to the pool when dropped.
     pub fn detach(self) -> T {
         // Don't drop Self and extract the inner type
         let t = ManuallyDrop::new(self);

@@ -1,17 +1,37 @@
-//! Memory pooling is a simple idea, malloc and free can be expensive and so can
-//! object initialization, if you malloc and init an object that is used
-//! temporarially, and it's likely you'll want to use a similar object again in
-//! the future, then don't throw all that work away by freeing it, stick it
-//! somewhere until you need it again. This library implements two different
-//! flavors of object pooling, local pooling and global pooling.
+//! A high-performance object pool that reuses allocations instead of freeing them.
+//!
+//! # Quick Start
+//!
+//! ```
+//! use poolshark::local::LPooled;
+//! use std::collections::HashMap;
+//!
+//! // Take a HashMap from the thread-local pool (or create new if empty)
+//! let mut map: LPooled<HashMap<String, i32>> = LPooled::take();
+//! map.insert("answer".to_string(), 42);
+//! // When dropped, the HashMap is cleared and returned to the pool
+//! ```
+//!
+//! # Which Pool Should I Use?
+//!
+//! - **Use [`local::LPooled`]** (default choice): Faster, for objects created and dropped on the same thread(s)
+//! - **Use [`global::GPooled`]**: When one thread creates objects and other threads drop them (producer-consumer)
+//!
+//! # Why Poolshark?
+//!
+//! - **Reduce allocations**: Reuse containers instead of repeatedly allocating and freeing
+//! - **Predictable performance**: Consistent behavior across platforms, independent of allocator
+//! - **Fast**: Local pools avoid atomic operations and are more ergonomic than `thread_local!`
+//! - **Flexible**: Choose between fast thread-local pools or lock-free cross-thread pools
+//!
+//! # Pool Types
 //!
 //! ## Global Pooling
 //!
-//! Global pools share objects between threads (see [GPooled](global::GPooled)),
-//! an object taken from a global pool will always return to the pool it was
-//! taken from. Use this if objects are usually dropped on a different thread
-//! than they are created on, for example a producer thread creating objects for
-//! consumer threads.
+//! Global pools share objects between threads (see [`global::GPooled`]).
+//! An object taken from a global pool always returns to the pool it was
+//! taken from, regardless of which thread drops it. Use this for producer-consumer
+//! patterns where one thread creates objects and other threads consume them.
 //!
 //! There are several different ways to use global pools. You can use
 //! [take](global::take) or [take_any](global::take_any) to just take objects
@@ -43,13 +63,16 @@
 //!
 //! ## Local Pooling
 //!
-//! Local pools (see [LPooled](local::LPooled)) always return dropped objects to a thread
-//! local structure on the thread that drops them. If your objects are produced
-//! and dropped on the same set of threads then a local pool is a good choice.
-//! Local pools are significantly faster than global pools because they avoid
-//! most atomic operations. Local pools require that your container type
-//! implement the unsafe trait IsoPoolable, so they can't be used with all
-//! types.
+//! Local pools (see [`local::LPooled`]) always return dropped objects to a thread-local
+//! pool on whichever thread drops them. They are significantly faster than global pools
+//! because they avoid atomic operations. Use local pools by default unless you have
+//! a cross-thread producer-consumer pattern.
+//!
+//! **Thread safety**: `LPooled<T>` is `Send + Sync` whenever `T` is `Send + Sync`, so you can
+//! safely pass pooled objects between threads.
+//!
+//! Local pools require types to implement the unsafe trait [`IsoPoolable`], but all
+//! standard containers (Vec, HashMap, String, etc.) already implement it.
 //!
 //! ```no_run
 //! use poolshark::local::LPooled;
@@ -126,7 +149,7 @@ impl ULayout {
 /// - The layout and alignment of all the type parameters of the container, up
 /// to 2 are supported. If your container has more that two type parameters
 /// then you can't locally pool it, and you can't implement [IsoPoolable]. If you
-/// do, you may caused UB.
+/// do, you will cause undefined behavior.
 ///
 /// In order to squeeze all this information into just 8 bytes there are some
 /// limitations.
@@ -172,16 +195,14 @@ impl Discriminant {
             Some(l) => elements[0] = l,
             None => return None,
         }
-        Some(Discriminant {
-            container: id,
-            elements,
-            size: Self::NO_SIZE,
-        })
+        Some(Discriminant { container: id, elements, size: Self::NO_SIZE })
     }
 
     /// build a discriminant for a type with 1 type variable `T` and a const
     /// `SIZE`. Return `None` if `T` or `SIZE` are too large to fit.
-    pub const fn new_p1_size<T, const SIZE: usize>(id: LocationId) -> Option<Discriminant> {
+    pub const fn new_p1_size<T, const SIZE: usize>(
+        id: LocationId,
+    ) -> Option<Discriminant> {
         let mut elements = [ULayout::empty(); 2];
         match ULayout::new::<T>() {
             Some(l) => elements[0] = l,
@@ -190,11 +211,7 @@ impl Discriminant {
         if SIZE >= 0xFFFF {
             return None;
         }
-        Some(Discriminant {
-            container: id,
-            elements,
-            size: SIZE as u16,
-        })
+        Some(Discriminant { container: id, elements, size: SIZE as u16 })
     }
 
     /// build a discriminant for a type with two type variables `T` and `U`.
@@ -209,17 +226,15 @@ impl Discriminant {
             Some(l) => elements[1] = l,
             None => return None,
         }
-        Some(Discriminant {
-            container: id,
-            elements,
-            size: Self::NO_SIZE,
-        })
+        Some(Discriminant { container: id, elements, size: Self::NO_SIZE })
     }
 
     /// build a discriminant for a type with two type variables `T` and `U` and
     /// a const SIZE. Return `None` if any of the parameters are too large to
     /// fit.
-    pub const fn new_p2_size<T, U, const SIZE: usize>(id: LocationId) -> Option<Discriminant> {
+    pub const fn new_p2_size<T, U, const SIZE: usize>(
+        id: LocationId,
+    ) -> Option<Discriminant> {
         let mut elements = [ULayout::empty(); 2];
         match ULayout::new::<T>() {
             Some(l) => elements[0] = l,
@@ -232,11 +247,7 @@ impl Discriminant {
         if SIZE >= 0xFFFF {
             return None;
         }
-        Some(Discriminant {
-            container: id,
-            elements,
-            size: SIZE as u16,
-        })
+        Some(Discriminant { container: id, elements, size: SIZE as u16 })
     }
 }
 
@@ -314,45 +325,57 @@ pub unsafe trait RawPoolable: Sized {
 pub unsafe trait IsoPoolable: Poolable {
     /// # Getting the Layout Right
     ///
-    /// You must pass every type variable that can effect the layout of the
-    /// container's inner allocation to Discriminant. Take HashMap as an
-    /// example. If you build the discriminant such as
-    /// `Discriminant::new_p1::<HashMap<K, V>>()` it would always be the same
-    /// for any `K`, `V`, because the `HashMap` struct doesn't actually contain
-    /// any `K`s or `V`s, just a pointer to some `K`s and `V`s. If you
-    /// implemented discriminant this way it would cause your program to crash
-    /// when you tried to pool two HashMap's with `K`, `V` types that aren't
-    /// isomorphic. Instead you must pass `K` and `V` to `Discriminant::new_p2::<K,
-    /// V>()` to get the real layout of the inner collection of `HashMap`. This is why
-    /// this trait is unsafe to implement, if you aren't careful when you build
-    /// the discriminant very bad things will happen.
+    /// You must pass every type variable that can effect the layout
+    /// of the container's inner allocation to Discriminant. Take
+    /// HashMap as an example. If you build the discriminant such as
+    /// `Discriminant::new_p1::<HashMap<K, V>>()` it would always be
+    /// the same for any `K`, `V`, because the `HashMap` struct
+    /// doesn't actually contain any `K`s or `V`s, just a pointer to
+    /// some `K`s and `V`s. If you implemented discriminant this way
+    /// it would cause undefined behavior when you tried to pool two
+    /// HashMap's with `K`, `V` types that aren't isomorphic. Instead
+    /// you must pass `K` and `V` to `Discriminant::new_p2::<K, V>()`
+    /// to get the real layout of the inner collection of
+    /// `HashMap`. This is why this trait is unsafe to implement, if
+    /// you aren't careful when you build the discriminant very bad
+    /// things will happen.
     ///
     /// # Why not TypeId
     ///
-    /// The reason why Discriminant is used instead of TypeId (which would
-    /// accomplish the same goal) is twofold. First Discriminant is 1 word on a
-    /// 64 bit machine, and thus very fast to index, and second TypeId only
-    /// supports types without references. However we often want to pool empty
-    /// containers where the inner type is a reference, thus we cannot use TypeId.
+    /// The reason why Discriminant is used instead of
+    /// [`TypeId`](std::any::TypeId) (which would accomplish the same
+    /// goal) is twofold. First Discriminant is 1 word on a 64 bit
+    /// machine, and thus very fast to index, and second `TypeId` only
+    /// supports types without references. However we often want to
+    /// pool empty containers where the inner type is a reference,
+    /// thus we cannot use `TypeId`.
     ///
-    /// # Why Return Option
+    /// # Why Discriminant is an Option
     ///
-    /// Discriminant is a compressed version of layout that squeezes 2 layouts a
-    /// size and a container type into 8 bytes. As such there are some layouts
-    /// that are too big to fit in it, and the constructor will return None in
-    /// those cases. For the purpose of pooling containers of small objects
-    /// these tradeoffs seemed worth it. If you must pool containers of huge
-    /// objects like this, you can use the thread safe pools.
+    /// Discriminant is a compressed version of layout that squeezes 2
+    /// layouts a size and a container type into 8 bytes. As such
+    /// there are some layouts that are too big to fit in it, and the
+    /// constructor will return None in those cases. For the purpose
+    /// of pooling containers of small objects these tradeoffs seemed
+    /// worth it. If you must pool containers of huge objects like
+    /// this, you can use the global pools.
     ///
     /// # Arc
     ///
-    /// It is not safe to implement this trait in general for something like
-    /// Arc, or any container that can't be totally empty (like array). This is
-    /// because having the same Discriminant only guarantees that two types are
-    /// isomorphic, it does not guarantee that they have the same bit patterns.
-    /// Normal container types are safe in spite of this because reset makes
-    /// sure they are empty, and thus no errent bit patterns exist in the
-    /// container and all we care about is that the container's allocation is
-    /// isomorphic with respect to the types we want to put in it.
+    /// It is not safe to implement this trait for
+    /// [`Arc`](std::sync::Arc) or in general for any container that
+    /// can't be totally empty. This is because having the same
+    /// Discriminant only guarantees that two types are isomorphic, it
+    /// does not guarantee that they have the same bit patterns.
+    /// Normal container types are safe in spite of this because reset
+    /// makes sure they are empty, and thus no errent bit patterns
+    /// exist in the container and all we care about is that the
+    /// container's allocation is isomorphic with respect to the types
+    /// we want to put in it. However `Arc` can never be empty, and
+    /// since notch optimization may change the bit pattern of `None`
+    /// depending on the type of `T`, it is not even safe to pool
+    /// `Arc<Option<T>>`. Because if `T` and `U` were isomorphic, but
+    /// notch optimization used a different bit pattern for `None`,
+    /// then pooling these objects could cause undefined behavior.
     const DISCRIMINANT: Option<Discriminant>;
 }

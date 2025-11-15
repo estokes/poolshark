@@ -1,4 +1,14 @@
-//! Implementations of Poolable on various standard types
+//! Built-in [`Poolable`] and [`IsoPoolable`] implementations.
+//!
+//! This module provides pooling support for standard library types:
+//!
+//! - **Containers**: `Vec<T>`, `VecDeque<T>`, `HashMap<K, V>`, `HashSet<K>`
+//! - **Strings**: `String`
+//! - **Optional containers**: `Option<T>` where `T: Poolable`
+//! - **IndexMap types** (with `indexmap` feature): `IndexMap<K, V>`, `IndexSet<K>`
+//!
+//! You don't need to import anything from this module - the implementations are
+//! automatically available when you use the pooled types.
 use super::{Discriminant, IsoPoolable, Poolable, location_id};
 #[cfg(feature = "indexmap")]
 use indexmap::{IndexMap, IndexSet};

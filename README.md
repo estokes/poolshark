@@ -47,6 +47,8 @@ Local pools are thread-local but more ergonomic than
 and use them naturally. When dropped, objects return to the pool of
 *whichever thread drops them*—not necessarily where they were created.
 
+**Thread safety**: `LPooled<T>` is `Send + Sync` whenever `T` is `Send + Sync`, so you can safely pass pooled objects between threads.
+
 **Performance**: Faster than global pools due to minimal atomic
 operations, should not be significantly different than using
 `thread_local!` directly. Use these by default unless you have a
@@ -90,6 +92,8 @@ fn main() {
 
 Global pools use lock-free queues to ensure objects always return to
 their origin pool, regardless of which thread drops them.
+
+**Thread safety**: `GPooled<T>` is `Send + Sync` whenever `T` is `Send + Sync`, making it safe to share pooled objects across threads.
 
 **Performance**: Will usually be faster than malloc/free. In cases
 where it isn't, it's usually close. Consistent across platforms with
