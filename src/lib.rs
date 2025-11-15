@@ -199,7 +199,7 @@ macro_rules! add_param {
 /// same project. This includes all the crates depended on by the project.
 ///
 /// - Your type parameters must have size <= 0x0FFF bytes and
-///   alignment of 1, 2, 4, 8, or 16.
+///   alignment of 1, 2, 4, 8, or 16. Alignments > 16 will be rejected.
 ///
 /// - const SIZE parameters must be <= 0x7FFF.
 ///
@@ -209,6 +209,35 @@ macro_rules! add_param {
 /// `None` then local pool operations on that type will work just fine, but
 /// nothing will be pooled. Objects will be freed when they are dropped and
 /// [take](local::take) will allocate new objects each time it is called.
+///
+/// # Discriminant Collisions and Why They're Safe
+///
+/// Two different types can have the same discriminant if they have the same size and
+/// alignment. For example:
+///
+/// ```ignore
+/// #[repr(C)]
+/// struct Padded1 { a: u8, _pad: [u8; 7], b: u64 }  // size 16, align 8
+///
+/// #[repr(C)]
+/// struct Padded2 { x: u64, y: u64 }                 // size 16, align 8
+/// ```
+///
+/// If you pool `Vec<Padded1>` and `Vec<Padded2>`, they would get the same discriminant
+/// because `Padded1` and `Padded2` have identical size and alignment. This means a
+/// `Vec<Padded1>` allocation could be reused as a `Vec<Padded2>` allocation.
+///
+/// **This is safe** because:
+///
+/// 1. Containers are **always empty** when returned to pools (`reset()` ensures this)
+/// 2. An empty `Vec<T>` only cares about `T`'s size and alignment for its allocation
+/// 3. The actual bit patterns inside `T` don't matter when the Vec is empty
+/// 4. When you take from the pool and populate it with your type, it's initialized correctly
+///
+/// The discriminant system is designed to ensure that different container **types** never
+/// share pools (via the `LocationId`), and that the **memory layout** of type parameters
+/// is compatible. As long as containers are properly emptied before pooling (which `reset()`
+/// guarantees), the system is memory safe even with discriminant collisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Discriminant {
     container: LocationId,
@@ -329,7 +358,7 @@ pub trait Poolable {
     /// allocate a new empty collection
     fn empty() -> Self;
 
-    /// empty the collection and reset it to it's default state so it
+    /// empty the collection and reset it to its default state so it
     /// can be put back in the pool.
     fn reset(&mut self);
 
@@ -363,7 +392,7 @@ pub unsafe trait RawPoolable: Sized {
     /// allocate a new empty object and set it's pool pointer to `pool`
     fn empty(pool: WeakPool<Self>) -> Self;
 
-    /// empty the collection and reset it to it's default state so it
+    /// empty the collection and reset it to its default state so it
     /// can be put back in the pool
     fn reset(&mut self);
 
