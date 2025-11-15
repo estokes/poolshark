@@ -37,6 +37,9 @@ map.insert("answer".to_string(), 42);
 | Objects are created and dropped on the same thread(s) | One thread creates objects, other threads drop them |
 | You want maximum performance | You need objects to return to a specific pool |
 
+**Rule of thumb**: Start with `LPooled` (faster). Switch to `GPooled`
+only if you have cross-thread producer-consumer patterns.
+
 ## Local Pools
 
 Local pools are thread-local but more ergonomic than
