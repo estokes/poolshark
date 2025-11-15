@@ -16,7 +16,7 @@ static GLOBAL_VEC_POOL: LazyLock<Pool<Vec<u64>>> =
 static GLOBAL_STRING_POOL: LazyLock<Pool<String>> =
     LazyLock::new(|| Pool::new(1024, 1024));
 
-const SIZES: [usize; 12] = [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+const SIZES: [u64; 12] = [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
 
 // Benchmark: Vec operations with local pooling vs standard allocation
 fn bench_vec(c: &mut Criterion) {
