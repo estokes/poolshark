@@ -16,10 +16,12 @@ static GLOBAL_VEC_POOL: LazyLock<Pool<Vec<u64>>> =
 static GLOBAL_STRING_POOL: LazyLock<Pool<String>> =
     LazyLock::new(|| Pool::new(1024, 1024));
 
+const SIZES: [usize; 12] = [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
 // Benchmark: Vec operations with local pooling vs standard allocation
 fn bench_vec(c: &mut Criterion) {
     let mut group = c.benchmark_group("vec");
-    for size in [1, 5, 10, 50, 100].iter() {
+    for size in SIZES.iter() {
         group.throughput(Throughput::Elements(*size as u64));
 
         // Standard allocation
@@ -71,7 +73,7 @@ fn bench_vec(c: &mut Criterion) {
 fn bench_hashmap(c: &mut Criterion) {
     let mut group = c.benchmark_group("hashmap");
 
-    for size in [1, 5, 10, 50, 100].iter() {
+    for size in SIZES.iter() {
         group.throughput(Throughput::Elements(*size as u64));
 
         // Standard allocation
@@ -123,7 +125,7 @@ fn bench_hashmap(c: &mut Criterion) {
 fn bench_string(c: &mut Criterion) {
     let mut group = c.benchmark_group("string");
 
-    for size in [1, 5, 10, 50, 100].iter() {
+    for size in SIZES.iter() {
         group.throughput(Throughput::Elements(*size as u64));
 
         // Standard allocation
