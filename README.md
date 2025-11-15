@@ -1,31 +1,65 @@
-# Thead Safe Object Pool
+# Thread Safe Object Pool
 
-This is a general purpose thread safe object pool that supports most
-data structures in the standard library, as well as many useful
-external data structures such as IndexMap, triomphe::Arc, etc. The
-idea is to reuse the structure and allocation of container objects
-that are dropped instead of destroying them.
+A high-performance, general-purpose object pool that reuses
+allocations instead of freeing them. Supports most standard library
+containers (Vec, HashMap, String, etc.) plus external types like
+IndexMap and triomphe::Arc.
 
-There are two kinds of pools, global, and local.
+## Why Poolshark?
+
+- **Reduce allocations**: Reuse containers instead of repeatedly allocating and freeing
+- **Predictable performance**: Consistent behavior across platforms, independent of allocator quality
+- **Low-cost abstraction**: Local pools have performance similar to thread_local! with simpler ergonomics
+- **Flexible**: Choose between fast thread-local pools or lock-free cross-thread pools
+
+## Installation
+
+```bash
+cargo add poolshark
+```
+
+## Quick Start
+
+```rust
+use poolshark::local::LPooled;
+use std::collections::HashMap;
+
+// Take a HashMap from the thread-local pool (or create new if the pool is empty)
+let mut map: LPooled<HashMap<String, i32>> = LPooled::take();
+map.insert("answer".to_string(), 42);
+// When dropped, the HashMap is cleared and returned to the pool
+```
+
+## Which Pool Should I Use?
+
+| Use Local Pools (`LPooled`) when... | Use Global Pools (`GPooled`) when... |
+|--------------------------------------|--------------------------------------|
+| Objects are created and dropped on the same thread(s) | One thread creates objects, other threads drop them |
+| You want maximum performance | You need objects to return to a specific pool |
+
+**Rule of thumb**: Start with `LPooled` (faster). Switch to `GPooled`
+only if you have cross-thread producer-consumer patterns.
 
 ## Local Pools
 
-Local pools can be thought of as a more ergonomic way to create a
-`thread_local!`. There is no need to wrap uses in a function like
-`with_borrow_mut`, and you can in fact own the objects, pass them
-between threads, etc. The primary difference between local pools and
-global pools is that objects allocated from a local pool always return
-to the pool associated with the thread that drops them. Other than
-this, they are significantly faster, and more convenent to use, so
-they should be the default in cases where the allocation pattern
-doesn't require a global pool.
+Local pools are thread-local but more ergonomic than
+`thread_local!`. You can own the objects, pass them between threads,
+and use them naturally. When dropped, objects return to the pool of
+*whichever thread drops them*—not necessarily where they were created.
+
+**Performance**: Faster than global pools due to no atomic operations,
+not significantly different than `thread_local!`  (on which it is
+based). Use these by default unless you have a cross-thread
+producer-consumer pattern.
+
+### Example: Deduplication With Minimal Allocations
 
 ```rust
 use poolshark::local::LPooled;
 use std::{collections::HashSet, hash::Hash};
 
 // dedup an unsorted vec. this will only allocate memory on,
-// - the first call
+// - the first call on a given thread
 // - if deduping a vec that is bigger than any previously seen
 // - if deduping a vec that is bigger than the max length allowed in the pool
 fn unsorted_dedup_stable<T: Hash + Eq>(v: &mut Vec<T>) {
@@ -55,20 +89,14 @@ fn main() {
 
 ## Global Pools
 
-Objects allocated from a global pool always return to the pool they
-were allocated from, regardless of which thread drops the object. A
-lock free queue is used, which imposes some overhead, but is necessary
-in cases where one thread will primarially allocate the objects while
-other threads consume them. If your objects will always stay on the
-same thread, or, all threads will allocate and free them equally then
-you should use a local pool.
+Global pools use lock-free queues to ensure objects always return to
+their origin pool, regardless of which thread drops them.
 
-In this example one task is always generating the message and another
-task is always consuming the message. If we used a local pool, then
-likely the batches freed on the consumer would just build up on the
-thread that usually runs that task, and the producer would need to
-keep allocating new batches because nothing would ever be returned to
-it's pool.
+**Performance**: Will usually be faster than malloc/free. In cases
+where it isn't, it's usually close. Consistent across platforms with
+very different allocators.
+
+### Example: Producer-Consumer Pattern
 
 ```rust
 use poolshark::global::{GPooled, Pool};
@@ -122,13 +150,32 @@ async fn main() {
 }
 
 // Once an initial working set is allocated this program does not call
-// malloc again, and free is never called except before
-// exit.
+// malloc again, and free is never called except before exit.
 
-// Depending on the platform allocator this is usually faster that a
+// Depending on the platform allocator this is usually faster than a
 // constant churn of malloc/free ops. Whether or not it's faster on a
-// particular platform, it is more determanistic across platforms. Yes
+// particular platform, it is more deterministic across platforms. Yes
 // the platform allocator may pull all the tricks in the book and
 // might even perform better, but move to some other platform and
 // performance is awful again.
 ```
+
+## Supported Types
+
+**Built-in support** (no additional code needed):
+- `Vec<T>`, `VecDeque<T>`, `String`
+- `HashMap<K, V>`, `HashSet<K>`
+- `IndexMap<K, V>`, `IndexSet<K>` (with `indexmap` feature)
+- `Option<T>` where `T` is poolable
+
+**Poolable Arc types**:
+- `Arc<T>` - Drop-in replacement for `std::sync::Arc` with pooling
+- `TArc<T>` - Lighter-weight Arc using `triomphe::Arc` (with `triomphe` feature)
+
+**Custom types**: Implement the `Poolable` trait (and optionally `IsoPoolable` for local pooling).
+
+## Features
+
+- **`triomphe`** (default): Enable `TArc<T>` poolable Arc
+- **`indexmap`** (default): Enable pooling for `IndexMap` and `IndexSet`
+- **`serde`** (default): Serialize/deserialize support for pooled types
