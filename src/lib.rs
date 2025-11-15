@@ -107,6 +107,19 @@ pub struct LocationId(pub u16);
 #[cfg(test)]
 mod test;
 
+// msb 0 -> it's a layout
+// msb 1 -> it's a size
+//
+// layout: 1 bit flag, 12 bit size, 3 bit align
+//
+// aligns
+// 0x0 -> 1
+// 0x1 -> 2
+// 0x2 -> 4
+// 0x3 -> 8
+// 0x4 -> 16
+//
+// size: 1 bit flag, 15 bit size
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ULayout(u16);
 
@@ -121,18 +134,44 @@ impl ULayout {
         Self(0)
     }
 
-    const fn new<T>() -> Option<Self> {
+    const fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+
+    const fn new_layout<T>() -> Option<Self> {
         let l = Layout::new::<T>();
         let size = l.size();
         let align = l.align();
         if size > 0x0FFF {
             return None;
         }
-        if align > 0x10 {
-            return None;
-        }
-        Some(Self(((size << 4) | (0x0F & align)) as u16))
+        let align = match align {
+            1 => 0x0,
+            2 => 0x1,
+            4 => 0x2,
+            8 => 0x3,
+            16 => 0x4,
+            _ => return None,
+        };
+        Some(Self(((size << 3) | align) as u16))
     }
+
+    const fn new_size(sz: usize) -> Option<Self> {
+        if sz > 0x7FFF {
+            None
+        } else {
+            Some(Self((0x8000 | sz) as u16))
+        }
+    }
+}
+
+macro_rules! add_param {
+    ($d:expr, $p:ty) => {
+        match $d.add_param::<$p>() {
+            Some(d) => d,
+            None => return None,
+        }
+    };
 }
 
 /// Type describing the layout, alignment, and type of a container
@@ -146,10 +185,12 @@ impl ULayout {
 /// unique id ensures that different container types can't be mixed in the same
 /// pool.
 ///
-/// - The layout and alignment of all the type parameters of the container, up
-/// to 2 are supported. If your container has more that two type parameters
-/// then you can't locally pool it, and you can't implement [IsoPoolable]. If you
-/// do, you will cause undefined behavior.
+/// - The layout and alignment of all the type parameters of the
+/// container. Discriminant has 3 slots that can be filled with either
+/// type parameters or const SIZE parameters. If your container has
+/// more parameters than that then you can't locally pool it, and you
+/// can't implement [IsoPoolable]. If you try you will likely cause
+/// undefined behavior.
 ///
 /// In order to squeeze all this information into just 8 bytes there are some
 /// limitations.
@@ -157,9 +198,10 @@ impl ULayout {
 /// - You can't have more than 0xFFFF implementations of [IsoPoolable] in the
 /// same project. This includes all the crates depended on by the project.
 ///
-/// - Your type parameters must have size <= 0x0FFF bytes and alignment <= 0xF.
+/// - Your type parameters must have size <= 0x0FFF bytes and
+///   alignment of 1, 2, 4, 8, or 16.
 ///
-/// - const SIZE parameters must be < 0xFFFF.
+/// - const SIZE parameters must be <= 0x7FFF.
 ///
 /// If any of these constraints are violated the `Discriminant` constructors
 /// will return `None`. If you desire you may panic at that point to cause a
@@ -170,84 +212,102 @@ impl ULayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Discriminant {
     container: LocationId,
-    elements: [ULayout; 2],
-    size: u16,
+    elements: [ULayout; 3],
 }
 
 impl Discriminant {
-    const NO_SIZE: u16 = 0xFFFF;
+    /// return a new empty discriminant
+    pub const fn empty(id: LocationId) -> Discriminant {
+        Discriminant { container: id, elements: [ULayout::empty(); 3] }
+    }
 
     /// build a discriminant for a type with no type variables (just a location
     /// id). Always returns Some
     pub const fn new(id: LocationId) -> Option<Discriminant> {
-        Some(Discriminant {
-            container: id,
-            elements: [ULayout::empty(); 2],
-            size: Self::NO_SIZE,
-        })
+        Some(Self::empty(id))
     }
 
-    /// build a discriminant for a type with 1 type variable `T`. Return `None` if
-    /// `T` is too large to fit.
-    pub const fn new_p1<T>(id: LocationId) -> Option<Discriminant> {
-        let mut elements = [ULayout::empty(); 2];
-        match ULayout::new::<T>() {
-            Some(l) => elements[0] = l,
+    /// Add a type parameter.
+    ///
+    /// Discriminant has 3 slots. Each slot can hold either a type
+    /// parameter or a const SIZE. This will return None if the
+    /// discriminant is full, or the type parameter's size or
+    /// alignment are too big.
+    pub const fn add_param<T>(mut self) -> Option<Self> {
+        let l = match ULayout::new_layout::<T>() {
             None => return None,
+            Some(l) => l,
+        };
+        let mut i = 0;
+        while i < 3 {
+            if self.elements[i].is_empty() {
+                self.elements[i] = l;
+                return Some(self);
+            }
+            i += 1
         }
-        Some(Discriminant { container: id, elements, size: Self::NO_SIZE })
+        None
     }
 
-    /// build a discriminant for a type with 1 type variable `T` and a const
-    /// `SIZE`. Return `None` if `T` or `SIZE` are too large to fit.
+    /// Add a const SIZE
+    ///
+    /// Discriminant has 3 slots. Each slot can hold either a type
+    /// parameter or a const SIZE. This will return None if the
+    /// discriminant is full, or if the size is too large.
+    pub const fn add_size<const SIZE: usize>(mut self) -> Option<Self> {
+        let l = match ULayout::new_size(SIZE) {
+            None => return None,
+            Some(l) => l,
+        };
+        let mut i = 0;
+        while i < 3 {
+            if self.elements[i].is_empty() {
+                self.elements[i] = l;
+                return Some(self);
+            }
+            i += 1
+        }
+        None
+    }
+
+    /// build a discriminant with one type param
+    pub const fn new_p1<T>(id: LocationId) -> Option<Discriminant> {
+        let d = Discriminant::empty(id);
+        d.add_param::<T>()
+    }
+
+    /// build a discriminant with one type param and a size
     pub const fn new_p1_size<T, const SIZE: usize>(
         id: LocationId,
     ) -> Option<Discriminant> {
-        let mut elements = [ULayout::empty(); 2];
-        match ULayout::new::<T>() {
-            Some(l) => elements[0] = l,
-            None => return None,
-        }
-        if SIZE >= 0xFFFF {
-            return None;
-        }
-        Some(Discriminant { container: id, elements, size: SIZE as u16 })
+        let d = Discriminant::empty(id);
+        let d = add_param!(d, T);
+        d.add_size::<SIZE>()
     }
 
-    /// build a discriminant for a type with two type variables `T` and `U`.
-    /// Return `None` if either `T` or `U` are too large to fit
+    /// build a discriminant with two type params
     pub const fn new_p2<T, U>(id: LocationId) -> Option<Discriminant> {
-        let mut elements = [ULayout::empty(); 2];
-        match ULayout::new::<T>() {
-            Some(l) => elements[0] = l,
-            None => return None,
-        }
-        match ULayout::new::<U>() {
-            Some(l) => elements[1] = l,
-            None => return None,
-        }
-        Some(Discriminant { container: id, elements, size: Self::NO_SIZE })
+        let d = Discriminant::empty(id);
+        let d = add_param!(d, T);
+        d.add_param::<U>()
     }
 
-    /// build a discriminant for a type with two type variables `T` and `U` and
-    /// a const SIZE. Return `None` if any of the parameters are too large to
-    /// fit.
+    /// build a discriminant with two type params and a size
     pub const fn new_p2_size<T, U, const SIZE: usize>(
         id: LocationId,
     ) -> Option<Discriminant> {
-        let mut elements = [ULayout::empty(); 2];
-        match ULayout::new::<T>() {
-            Some(l) => elements[0] = l,
-            None => return None,
-        }
-        match ULayout::new::<U>() {
-            Some(l) => elements[1] = l,
-            None => return None,
-        }
-        if SIZE >= 0xFFFF {
-            return None;
-        }
-        Some(Discriminant { container: id, elements, size: SIZE as u16 })
+        let d = Discriminant::empty(id);
+        let d = add_param!(d, T);
+        let d = add_param!(d, U);
+        d.add_size::<SIZE>()
+    }
+
+    /// build a discriminant with three type params
+    pub const fn new_p3<T, U, V>(id: LocationId) -> Option<Discriminant> {
+        let d = Discriminant::empty(id);
+        let d = add_param!(d, T);
+        let d = add_param!(d, U);
+        d.add_param::<V>()
     }
 }
 

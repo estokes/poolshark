@@ -9,11 +9,10 @@
 //!
 //! You don't need to import anything from this module - the implementations are
 //! automatically available when you use the pooled types.
-use super::{Discriminant, IsoPoolable, Poolable, location_id};
+use super::{location_id, Discriminant, IsoPoolable, Poolable};
 #[cfg(feature = "indexmap")]
 use indexmap::{IndexMap, IndexSet};
 use std::{
-    alloc::Layout,
     cmp::Eq,
     collections::{HashMap, HashSet, VecDeque},
     default::Default,
@@ -45,10 +44,8 @@ macro_rules! impl_hashmap {
             K: Hash + Eq,
             R: Default + BuildHasher,
         {
-            const DISCRIMINANT: Option<Discriminant> = {
-                assert!(Layout::new::<R>().size() == 0);
-                Discriminant::new_p2::<K, V>(location_id!())
-            };
+            const DISCRIMINANT: Option<Discriminant> =
+                { Discriminant::new_p3::<K, V, R>(location_id!()) };
         }
     };
 }
@@ -82,7 +79,8 @@ macro_rules! impl_hashset {
             K: Hash + Eq,
             R: Default + BuildHasher,
         {
-            const DISCRIMINANT: Option<Discriminant> = Discriminant::new_p2::<K, R>(location_id!());
+            const DISCRIMINANT: Option<Discriminant> =
+                Discriminant::new_p2::<K, R>(location_id!());
         }
     };
 }

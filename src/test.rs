@@ -1,27 +1,32 @@
 use super::global::{
-    Pool, RawPool,
     arc::{Arc, TArc},
+    Pool, RawPool,
 };
-use crate::local::LPooled;
+use crate::{local::LPooled, IsoPoolable};
 use fxhash::FxHashMap;
-use std::hash::Hash;
+use std::{
+    collections::HashMap,
+    hash::{BuildHasher, Hash},
+};
 
 /*
-==373258==
-==373258== HEAP SUMMARY:
-==373258==     in use at exit: 504 bytes in 2 blocks
-==373258==   total heap usage: 11,053 allocs, 11,051 frees, 86,398,708 bytes allocated
-==373258==
-==373258== LEAK SUMMARY:
-==373258==    definitely lost: 0 bytes in 0 blocks
-==373258==    indirectly lost: 0 bytes in 0 blocks
-==373258==      possibly lost: 48 bytes in 1 blocks
-==373258==    still reachable: 456 bytes in 1 blocks
-==373258==         suppressed: 0 bytes in 0 blocks
-==373258== Rerun with --leak-check=full to see details of leaked memory
-==373258==
-==373258== For lists of detected and suppressed errors, rerun with: -s
-==373258== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+Sat Nov 15 02:08:42 PM EST 2025
+
+==56172==
+==56172== HEAP SUMMARY:
+==56172==     in use at exit: 504 bytes in 2 blocks
+==56172==   total heap usage: 11,052 allocs, 11,050 frees, 86,399,371 bytes allocated
+==56172==
+==56172== LEAK SUMMARY:
+==56172==    definitely lost: 0 bytes in 0 blocks
+==56172==    indirectly lost: 0 bytes in 0 blocks
+==56172==      possibly lost: 48 bytes in 1 blocks
+==56172==    still reachable: 456 bytes in 1 blocks
+==56172==         suppressed: 0 bytes in 0 blocks
+==56172== Rerun with --leak-check=full to see details of leaked memory
+==56172==
+==56172== For lists of detected and suppressed errors, rerun with: -s
+==56172== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
 */
 #[test]
 fn normal_pool() {
@@ -71,61 +76,79 @@ fn normal_pool() {
 }
 
 /*
-==373122==
-==373122== HEAP SUMMARY:
-==373122==     in use at exit: 504 bytes in 2 blocks
-==373122==   total heap usage: 661 allocs, 659 frees, 144,609 bytes allocated
-==373122==
-==373122== LEAK SUMMARY:
-==373122==    definitely lost: 0 bytes in 0 blocks
-==373122==    indirectly lost: 0 bytes in 0 blocks
-==373122==      possibly lost: 48 bytes in 1 blocks
-==373122==    still reachable: 456 bytes in 1 blocks
-==373122==         suppressed: 0 bytes in 0 blocks
-==373122== Rerun with --leak-check=full to see details of leaked memory
-==373122==
-==373122== For lists of detected and suppressed errors, rerun with: -s
-==373122== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+Sat Nov 15 02:08:42 PM EST 2025
+
+==55566==
+==55566== HEAP SUMMARY:
+==55566==     in use at exit: 504 bytes in 2 blocks
+==55566==   total heap usage: 663 allocs, 661 frees, 194,572 bytes allocated
+==55566==
+==55566== LEAK SUMMARY:
+==55566==    definitely lost: 0 bytes in 0 blocks
+==55566==    indirectly lost: 0 bytes in 0 blocks
+==55566==      possibly lost: 48 bytes in 1 blocks
+==55566==    still reachable: 456 bytes in 1 blocks
+==55566==         suppressed: 0 bytes in 0 blocks
+==55566== Rerun with --leak-check=full to see details of leaked memory
+==55566==
+==55566== For lists of detected and suppressed errors, rerun with: -s
+==55566== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
 */
 #[test]
 fn local_pool() {
     let mut hmp0 = None;
     let mut hmp1 = None;
-    fn check_ptr<K: Hash + Eq, V>(orig: &mut Option<usize>, hm: &LPooled<FxHashMap<K, V>>) {
-        let p = hm as *const LPooled<FxHashMap<K, V>> as usize;
+    let mut hmp2 = None;
+    fn check_ptr<K: Hash + Eq, V, R: BuildHasher + Default>(
+        orig: &mut Option<usize>,
+        hm: &LPooled<HashMap<K, V, R>>,
+    ) {
+        let p = hm as *const LPooled<HashMap<K, V, R>> as usize;
         match orig {
             Some(orig) => assert_eq!(p, *orig),
             None => *orig = Some(p),
         }
     }
-    for _ in 0..100 {
+    let d0 = <FxHashMap<i32, i32> as IsoPoolable>::DISCRIMINANT;
+    let d1 = <FxHashMap<usize, usize> as IsoPoolable>::DISCRIMINANT;
+    let d2 = <HashMap<usize, usize> as IsoPoolable>::DISCRIMINANT;
+    assert!(d0 != d1);
+    assert!(d0 != d2);
+    assert!(d1 != d2);
+    for _ in 0..1000 {
         let mut hm0 = LPooled::<FxHashMap<i32, i32>>::take();
         let mut hm1 = LPooled::<FxHashMap<usize, usize>>::take();
+        let mut hm2 = LPooled::<HashMap<usize, usize>>::take();
         check_ptr(&mut hmp0, &hm0);
         check_ptr(&mut hmp1, &hm1);
+        check_ptr(&mut hmp2, &hm2);
         hm0.insert(42, 0);
         hm0.insert(0, 42);
         hm1.insert(0, 42);
         hm1.insert(42, 0);
+        hm2.insert(0, 0);
+        hm2.insert(1, 1);
     }
 }
 
 /*
-==373438==
-==373438== HEAP SUMMARY:
-==373438==     in use at exit: 504 bytes in 2 blocks
-==373438==   total heap usage: 21,253 allocs, 21,251 frees, 1,989,294 bytes allocated
-==373438==
-==373438== LEAK SUMMARY:
-==373438==    definitely lost: 0 bytes in 0 blocks
-==373438==    indirectly lost: 0 bytes in 0 blocks
-==373438==      possibly lost: 48 bytes in 1 blocks
-==373438==    still reachable: 456 bytes in 1 blocks
-==373438==         suppressed: 0 bytes in 0 blocks
-==373438== Rerun with --leak-check=full to see details of leaked memory
-==373438==
-==373438== For lists of detected and suppressed errors, rerun with: -s
-==373438== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+Sat Nov 15 02:08:42 PM EST 2025
+
+==55999==
+==55999== HEAP SUMMARY:
+==55999==     in use at exit: 504 bytes in 2 blocks
+==55999==   total heap usage: 21,252 allocs, 21,250 frees, 1,989,957 bytes allocated
+==55999==
+==55999== LEAK SUMMARY:
+==55999==    definitely lost: 0 bytes in 0 blocks
+==55999==    indirectly lost: 0 bytes in 0 blocks
+==55999==      possibly lost: 48 bytes in 1 blocks
+==55999==    still reachable: 456 bytes in 1 blocks
+==55999==         suppressed: 0 bytes in 0 blocks
+==55999== Rerun with --leak-check=full to see details of leaked memory
+==55999==
+==55999== For lists of detected and suppressed errors, rerun with: -s
+==55999== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
 */
 #[test]
 fn tarc_pool() {
@@ -158,21 +181,23 @@ fn tarc_pool() {
 }
 
 /*
-==373504==
-==373504== HEAP SUMMARY:
-==373504==     in use at exit: 504 bytes in 2 blocks
-==373504==   total heap usage: 41,878 allocs, 41,876 frees, 3,902,901 bytes allocated
-==373504==
-==373504== LEAK SUMMARY:
-==373504==    definitely lost: 0 bytes in 0 blocks
-==373504==    indirectly lost: 0 bytes in 0 blocks
-==373504==      possibly lost: 48 bytes in 1 blocks
-==373504==    still reachable: 456 bytes in 1 blocks
-==373504==         suppressed: 0 bytes in 0 blocks
-==373504== Rerun with --leak-check=full to see details of leaked memory
-==373504==
-==373504== For lists of detected and suppressed errors, rerun with: -s
-==373504== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+Sat Nov 15 02:08:42 PM EST 2025
+
+==56080==
+==56080== HEAP SUMMARY:
+==56080==     in use at exit: 504 bytes in 2 blocks
+==56080==   total heap usage: 21,253 allocs, 21,251 frees, 1,991,551 bytes allocated
+==56080==
+==56080== LEAK SUMMARY:
+==56080==    definitely lost: 0 bytes in 0 blocks
+==56080==    indirectly lost: 0 bytes in 0 blocks
+==56080==      possibly lost: 48 bytes in 1 blocks
+==56080==    still reachable: 456 bytes in 1 blocks
+==56080==         suppressed: 0 bytes in 0 blocks
+==56080== Rerun with --leak-check=full to see details of leaked memory
+==56080==
+==56080== For lists of detected and suppressed errors, rerun with: -s
+==56080== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
 */
 #[test]
 fn arc_pool() {
