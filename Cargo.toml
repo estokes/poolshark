@@ -29,3 +29,15 @@ poolshark_derive = { version = "0.1.1", path = "poolshark_derive" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "pooling"
+harness = false
+
+[profile.bench]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = false
+strip = true
