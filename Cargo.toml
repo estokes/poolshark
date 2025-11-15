@@ -26,3 +26,6 @@ serde_derive = { version = "1", optional = true }
 serde = { version = "1", optional = true }
 triomphe = { version = "0.1", optional = true }
 poolshark_derive = { version = "0.1.1", path = "poolshark_derive" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

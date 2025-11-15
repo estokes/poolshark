@@ -3,7 +3,7 @@ use crate::{Discriminant, IsoPoolable, Opaque, Poolable, RawPoolable};
 use crossbeam_queue::ArrayQueue;
 use fxhash::FxHashMap;
 #[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     any::{Any, TypeId},
     borrow::Borrow,
@@ -11,7 +11,7 @@ use std::{
     cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd},
     collections::HashMap,
     default::Default,
-    fmt::{self, Debug},
+    fmt::{self, Debug, Display},
     hash::{Hash, Hasher},
     mem::{self, ManuallyDrop},
     ops::{Deref, DerefMut},
@@ -97,10 +97,7 @@ pub fn clear_type<T: IsoPoolable>() {
 /// can first clear_type (or clear) and then set_size.
 pub fn set_size<T: IsoPoolable>(max_pool_size: usize, max_element_capacity: usize) {
     if let Some(d) = T::DISCRIMINANT {
-        SIZES
-            .lock()
-            .unwrap()
-            .insert(d, (max_pool_size, max_element_capacity));
+        SIZES.lock().unwrap().insert(d, (max_pool_size, max_element_capacity));
     }
 }
 
@@ -108,19 +105,13 @@ pub fn set_size<T: IsoPoolable>(max_pool_size: usize, max_element_capacity: usiz
 /// get_size returns None then the type will not be pooled.
 pub fn get_size<T: IsoPoolable>() -> Option<(usize, usize)> {
     T::DISCRIMINANT.map(|d| {
-        SIZES
-            .lock()
-            .unwrap()
-            .get(&d)
-            .map(|(s, c)| (*s, *c))
-            .unwrap_or(DEFAULT_SIZES)
+        SIZES.lock().unwrap().get(&d).map(|(s, c)| (*s, *c)).unwrap_or(DEFAULT_SIZES)
     })
 }
 
 fn take_inner<T: IsoPoolable>(sizes: Option<(usize, usize)>) -> GPooled<T> {
     with_pool(sizes, |pool| {
-        pool.map(|p| p.take())
-            .unwrap_or_else(|| GPooled::orphan(T::empty()))
+        pool.map(|p| p.take()).unwrap_or_else(|| GPooled::orphan(T::empty()))
     })
 }
 
@@ -224,6 +215,12 @@ impl<T: Poolable + Debug> fmt::Debug for GPooled<T> {
     }
 }
 
+impl<T: Poolable + Display> fmt::Display for GPooled<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", &*self.object)
+    }
+}
+
 impl<T: IsoPoolable> Default for GPooled<T> {
     fn default() -> Self {
         take()
@@ -312,10 +309,7 @@ impl<T: Poolable> GPooled<T> {
     /// Creates a `GPooled` that isn't connected to any pool. E.G. for
     /// branches where you know a given `Pooled` will always be empty.
     pub fn orphan(t: T) -> Self {
-        Self {
-            pool: ManuallyDrop::new(WeakPool::new()),
-            object: ManuallyDrop::new(t),
-        }
+        Self { pool: ManuallyDrop::new(WeakPool::new()), object: ManuallyDrop::new(t) }
     }
 
     /// assign the `GPooled` to the specified pool. When it is dropped
@@ -481,10 +475,7 @@ impl<T: RawPoolable> RawPool<T> {
 
     /// takes an item from the pool, creating one if none are available.
     pub fn take(&self) -> T {
-        self.0
-            .pool
-            .pop()
-            .unwrap_or_else(|| RawPoolable::empty(self.downgrade()))
+        self.0.pool.pop().unwrap_or_else(|| RawPoolable::empty(self.downgrade()))
     }
 
     /// Insert an object into the pool. The object may be dropped if
