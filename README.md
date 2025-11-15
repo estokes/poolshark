@@ -6,6 +6,51 @@ external data structures such as IndexMap, triomphe::Arc, etc.
 
 There are two kinds of pools, global, and local.
 
+## Local Pools
+
+Local pools can be thought of as a more ergonomic way to create a
+`thread_local!`. There is no need to wrap uses in a function like
+`with_borrow_mut`, and you can in fact own the objects, pass them
+between threads, etc. The primary difference between local pools and
+global pools is that objects allocated from a local pool always return
+to the pool associated with the thread that drops them. Other than
+this, they are significantly faster, and more convenent to use, so
+they should be the default in cases where the allocation pattern
+doesn't require a global pool.
+
+```rust
+use poolshark::local::LPooled;
+use std::{collections::HashSet, hash::Hash};
+
+// dedup an unsorted vec. this will only allocate memory on,
+// - the first call
+// - if deduping a vec that is bigger than any previously seen
+// - if deduping a vec that is bigger than the max length allowed in the pool
+fn unsorted_dedup_stable<T: Hash + Eq>(v: &mut Vec<T>) {
+    let mut set: LPooled<HashSet<&T>> = LPooled::take();
+    let mut remove: LPooled<Vec<usize>> = LPooled::take();
+    let mut removed = 0;
+    for (i, t) in v.iter().enumerate() {
+        if !set.insert(t) {
+            remove.push(i - removed);
+            removed += 1
+        }
+    }
+    drop(set); // set is cleared and pushed to the thread local pool
+    for i in remove.drain(..) {
+        v.remove(i);
+    }
+    // remove is cleared and pushed to the thread local pool
+}
+
+fn main() {
+    let mut v = vec!["one", "two", "one", "five", "three sir", "three", "four", "five"];
+    println!("with dupes: {:?}", v);
+    unsorted_dedup_stable(&mut v);
+    println!("deduped: {:?}", v)
+}
+```
+
 ## Global Pools
 
 Objects allocated from a global pool always return to the pool they
@@ -84,49 +129,4 @@ async fn main() {
 // the platform allocator may pull all the tricks in the book and
 // might even perform better, but move to some other platform and
 // performance is awful again.
-```
-
-## Local Pools
-
-Local pools can be thought of as a more ergonomic way to create a
-`thread_local!`. There is no need to wrap uses in a function like
-`with_borrow_mut`, and you can in fact own the objects, pass them
-between threads, etc. The primary difference between local pools and
-global pools is that objects allocated from a local pool always return
-to the pool associated with the thread that drops them. Other than
-this, they are significantly faster, and more convenent to use, so
-they should be the default in cases where the allocation pattern
-doesn't require a global pool.
-
-```rust
-use poolshark::local::LPooled;
-use std::{collections::HashSet, hash::Hash};
-
-// dedup an unsorted vec. this will only allocate memory on,
-// - the first call
-// - if deduping a vec that is bigger than any previously seen
-// - if deduping a vec that is bigger than the max length allowed in the pool
-fn unsorted_dedup_stable<T: Hash + Eq>(v: &mut Vec<T>) {
-    let mut set: LPooled<HashSet<&T>> = LPooled::take(); // take set from the pool or allocate it
-    let mut remove: LPooled<Vec<usize>> = LPooled::take(); // take remove from the pool or allocate it
-    let mut removed = 0;
-    for (i, t) in v.iter().enumerate() {
-        if !set.insert(t) {
-            remove.push(i - removed);
-            removed += 1
-        }
-    }
-    drop(set); // set is cleared and pushed to the thread local pool
-    for i in remove.drain(..) {
-        v.remove(i);
-    }
-    // remove is cleared and pushed to the thread local pool
-}
-
-fn main() {
-    let mut v = vec!["one", "two", "one", "five", "three sir", "three", "four", "five"];
-    println!("with dupes: {:?}", v);
-    unsorted_dedup_stable(&mut v);
-    println!("deduped: {:?}", v)
-}
 ```
