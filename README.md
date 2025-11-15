@@ -47,9 +47,10 @@ Local pools are thread-local but more ergonomic than
 and use them naturally. When dropped, objects return to the pool of
 *whichever thread drops them*—not necessarily where they were created.
 
-**Performance**: Faster than global pools due to no atomic operations,
-not significantly different than `thread_local!`. Use these by default
-unless you have a cross-thread producer-consumer pattern.
+**Performance**: Faster than global pools due to minimal atomic
+operations, should not be significantly different than using
+`thread_local!` directly. Use these by default unless you have a
+cross-thread producer-consumer pattern.
 
 ### Example: Deduplication With Minimal Allocations
 
