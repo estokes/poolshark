@@ -2,7 +2,9 @@
 
 This is a general purpose thread safe object pool that supports most
 data structures in the standard library, as well as many useful
-external data structures such as IndexMap, triomphe::Arc, etc.
+external data structures such as IndexMap, triomphe::Arc, etc. The
+idea is to reuse the structure and allocation of container objects
+that are dropped instead of destroying them.
 
 There are two kinds of pools, global, and local.
 
