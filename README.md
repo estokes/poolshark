@@ -24,7 +24,7 @@ cargo add poolshark
 use poolshark::local::LPooled;
 use std::collections::HashMap;
 
-// Take a HashMap from the thread-local pool (or create new if the pool is empty)
+// Take a HashMap from the thread-local pool (or create a new one if the pool is empty)
 let mut map: LPooled<HashMap<String, i32>> = LPooled::take();
 map.insert("answer".to_string(), 42);
 // When dropped, the HashMap is cleared and returned to the pool
@@ -48,9 +48,8 @@ and use them naturally. When dropped, objects return to the pool of
 *whichever thread drops them*—not necessarily where they were created.
 
 **Performance**: Faster than global pools due to no atomic operations,
-not significantly different than `thread_local!`  (on which it is
-based). Use these by default unless you have a cross-thread
-producer-consumer pattern.
+not significantly different than `thread_local!`. Use these by default
+unless you have a cross-thread producer-consumer pattern.
 
 ### Example: Deduplication With Minimal Allocations
 
