@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo doc:*)",
+      "Bash(git show:*)",
+      "Bash(cargo bench:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
