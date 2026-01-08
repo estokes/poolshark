@@ -25,8 +25,19 @@ impl BuildEnv {
             if arg == "--out-dir" {
                 t.out_dir = PathBuf::from(args.next().expect("missing out dir"));
             }
+            if arg.starts_with("--out-dir=") {
+                t.out_dir = PathBuf::from(
+                    arg.strip_prefix("--out-dir=").expect("invalid out-dir"),
+                );
+            }
             if arg == "--crate-name" {
                 t.crate_name = args.next().expect("missing crate name");
+            }
+            if arg.starts_with("--crate-name=") {
+                t.crate_name = arg
+                    .strip_prefix("--crate-name=")
+                    .expect("invalid crate-name")
+                    .to_owned();
             }
             if let Some(s) = arg.strip_prefix("dependency=") {
                 dep = PathBuf::from(s)
