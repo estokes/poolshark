@@ -19,75 +19,117 @@ use std::{
     hash::{BuildHasher, Hash},
 };
 
-macro_rules! impl_hashmap {
-    ($ty:ident) => {
-        impl<K, V, R> Poolable for $ty<K, V, R>
-        where
-            K: Hash + Eq,
-            R: Default + BuildHasher,
-        {
-            fn empty() -> Self {
-                $ty::default()
-            }
+impl<K, V, R> Poolable for HashMap<K, V, R>
+where
+    K: Hash + Eq,
+    R: Default + BuildHasher,
+{
+    fn empty() -> Self {
+        HashMap::default()
+    }
 
-            fn reset(&mut self) {
-                self.clear()
-            }
+    fn reset(&mut self) {
+        self.clear()
+    }
 
-            fn capacity(&self) -> usize {
-                $ty::capacity(self)
-            }
-        }
-
-        unsafe impl<K, V, R> IsoPoolable for $ty<K, V, R>
-        where
-            K: Hash + Eq,
-            R: Default + BuildHasher,
-        {
-            const DISCRIMINANT: Option<Discriminant> =
-                { Discriminant::new_p3::<K, V, R>(location_id!()) };
-        }
-    };
+    fn capacity(&self) -> usize {
+        HashMap::capacity(self)
+    }
 }
 
-impl_hashmap!(HashMap);
-#[cfg(feature = "indexmap")]
-impl_hashmap!(IndexMap);
-
-macro_rules! impl_hashset {
-    ($ty:ident) => {
-        impl<K, R> Poolable for $ty<K, R>
-        where
-            K: Hash + Eq,
-            R: Default + BuildHasher,
-        {
-            fn empty() -> Self {
-                $ty::default()
-            }
-
-            fn reset(&mut self) {
-                self.clear()
-            }
-
-            fn capacity(&self) -> usize {
-                $ty::capacity(self)
-            }
-        }
-
-        unsafe impl<K, R> IsoPoolable for $ty<K, R>
-        where
-            K: Hash + Eq,
-            R: Default + BuildHasher,
-        {
-            const DISCRIMINANT: Option<Discriminant> =
-                Discriminant::new_p2::<K, R>(location_id!());
-        }
-    };
+unsafe impl<K, V, R> IsoPoolable for HashMap<K, V, R>
+where
+    K: Hash + Eq,
+    R: Default + BuildHasher,
+{
+    const DISCRIMINANT: Option<Discriminant> =
+        { Discriminant::new_p3::<K, V, R>(location_id!()) };
 }
 
-impl_hashset!(HashSet);
 #[cfg(feature = "indexmap")]
-impl_hashset!(IndexSet);
+impl<K, V, R> Poolable for IndexMap<K, V, R>
+where
+    K: Hash + Eq,
+    R: Default + BuildHasher,
+{
+    fn empty() -> Self {
+        IndexMap::default()
+    }
+
+    fn reset(&mut self) {
+        self.clear()
+    }
+
+    fn capacity(&self) -> usize {
+        IndexMap::capacity(self)
+    }
+}
+
+#[cfg(feature = "indexmap")]
+unsafe impl<K, V, R> IsoPoolable for IndexMap<K, V, R>
+where
+    K: Hash + Eq,
+    R: Default + BuildHasher,
+{
+    const DISCRIMINANT: Option<Discriminant> =
+        { Discriminant::new_p3::<K, V, R>(location_id!()) };
+}
+
+impl<K, R> Poolable for HashSet<K, R>
+where
+    K: Hash + Eq,
+    R: Default + BuildHasher,
+{
+    fn empty() -> Self {
+        HashSet::default()
+    }
+
+    fn reset(&mut self) {
+        self.clear()
+    }
+
+    fn capacity(&self) -> usize {
+        HashSet::capacity(self)
+    }
+}
+
+unsafe impl<K, R> IsoPoolable for HashSet<K, R>
+where
+    K: Hash + Eq,
+    R: Default + BuildHasher,
+{
+    const DISCRIMINANT: Option<Discriminant> =
+        Discriminant::new_p2::<K, R>(location_id!());
+}
+
+#[cfg(feature = "indexmap")]
+impl<K, R> Poolable for IndexSet<K, R>
+where
+    K: Hash + Eq,
+    R: Default + BuildHasher,
+{
+    fn empty() -> Self {
+        IndexSet::default()
+    }
+
+    fn reset(&mut self) {
+        self.clear()
+    }
+
+    fn capacity(&self) -> usize {
+        IndexSet::capacity(self)
+    }
+}
+
+#[cfg(feature = "indexmap")]
+unsafe impl<K, R> IsoPoolable for IndexSet<K, R>
+where
+    K: Hash + Eq,
+    R: Default + BuildHasher,
+{
+    const DISCRIMINANT: Option<Discriminant> =
+        Discriminant::new_p2::<K, R>(location_id!());
+}
 
 impl<T> Poolable for Vec<T> {
     fn empty() -> Self {
