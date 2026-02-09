@@ -8,7 +8,7 @@ keywords = ["pool", "recycle", "object-pool"]
 license = "MIT"
 name = "poolshark_derive"
 repository = "https://github.com/estokes/poolshark"
-version = "0.1.1"
+version = "0.1.2"
 
 [lib]
 proc-macro = true
