@@ -15,29 +15,21 @@ struct BuildEnv {
 
 impl BuildEnv {
     fn get() -> Self {
-        let mut t = Self {
-            out_dir: PathBuf::new(),
-            crate_name: String::new(),
-        };
+        let mut t = Self { out_dir: PathBuf::new(), crate_name: String::new() };
         let mut args = std::env::args();
         let mut dep = PathBuf::new();
         while let Some(arg) = args.next() {
             if arg == "--out-dir" {
                 t.out_dir = PathBuf::from(args.next().expect("missing out dir"));
             }
-            if arg.starts_with("--out-dir=") {
-                t.out_dir = PathBuf::from(
-                    arg.strip_prefix("--out-dir=").expect("invalid out-dir"),
-                );
+            if let Some(outdir) = arg.strip_prefix("--out-dir=") {
+                t.out_dir = PathBuf::from(outdir);
             }
             if arg == "--crate-name" {
                 t.crate_name = args.next().expect("missing crate name");
             }
-            if arg.starts_with("--crate-name=") {
-                t.crate_name = arg
-                    .strip_prefix("--crate-name=")
-                    .expect("invalid crate-name")
-                    .to_owned();
+            if let Some(name) = arg.strip_prefix("--crate-name=") {
+                t.crate_name = name.to_owned();
             }
             if let Some(s) = arg.strip_prefix("dependency=") {
                 dep = PathBuf::from(s)
@@ -110,8 +102,7 @@ fn allocate_id(path: &Path, key: String) -> u16 {
             }
             ids.insert(key, id);
             let mut file = reader.into_inner();
-            file.seek(io::SeekFrom::Start(0))
-                .expect("could not seek to beginning");
+            file.seek(io::SeekFrom::Start(0)).expect("could not seek to beginning");
             for (k, v) in ids {
                 write!(file, "{k} = {v}\n").expect("could not write line")
             }
@@ -150,13 +141,8 @@ fn allocate_id(path: &Path, key: String) -> u16 {
 pub fn location_id(_input: TokenStream) -> TokenStream {
     let cfg = BuildEnv::get();
     let loc = Span::call_site();
-    let key = format!(
-        "{}:{}:{}:{}",
-        cfg.crate_name,
-        loc.file(),
-        loc.line(),
-        loc.column()
-    );
+    let key =
+        format!("{}:{}:{}:{}", cfg.crate_name, loc.file(), loc.line(), loc.column());
     let path = cfg.out_dir.join(".poolshark_loc_ids");
     let id = allocate_id(&path, key);
     if cfg.crate_name == "poolshark" {
