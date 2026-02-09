@@ -7,6 +7,30 @@ use fxhash::{FxHashMap, FxHashSet};
 use indexmap::{IndexMap, IndexSet};
 use std::collections::{HashMap, HashSet, VecDeque};
 
+/* run the test suite under valgrind before release and paste the result here
+
+2026-02-09 11:34 EST
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 77.22s
+
+==5919==
+==5919== HEAP SUMMARY:
+==5919==     in use at exit: 592 bytes in 2 blocks
+==5919==   total heap usage: 86,660 allocs, 86,658 frees, 251,435,261 bytes allocated
+==5919==
+==5919== LEAK SUMMARY:
+==5919==    definitely lost: 0 bytes in 0 blocks
+==5919==    indirectly lost: 0 bytes in 0 blocks
+==5919==      possibly lost: 48 bytes in 1 blocks
+==5919==    still reachable: 544 bytes in 1 blocks
+==5919==         suppressed: 0 bytes in 0 blocks
+==5919== Rerun with --leak-check=full to see details of leaked memory
+==5919==
+==5919== For lists of detected and suppressed errors, rerun with: -s
+==5919== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+
+*/
+
 ////////// normal pool tests //////////
 
 #[test]
