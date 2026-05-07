@@ -58,7 +58,7 @@
 //!   pool for fat references).
 
 use crate::{Discriminant, IsoPoolable, Opaque};
-use fxhash::FxHashMap;
+use nohash::IntMap;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     borrow::Borrow,
@@ -85,14 +85,14 @@ impl<T: IsoPoolable> Pool<T> {
 }
 
 thread_local! {
-    static POOLS: RefCell<FxHashMap<Discriminant, Opaque>> =
+    static POOLS: RefCell<IntMap<Discriminant, Opaque>> =
         RefCell::new(HashMap::default());
 }
 
 const DEFAULT_SIZES: (usize, usize) = (1024, 1024);
 
-static SIZES: LazyLock<Mutex<FxHashMap<Discriminant, (usize, usize)>>> =
-    LazyLock::new(|| Mutex::new(FxHashMap::default()));
+static SIZES: LazyLock<Mutex<IntMap<Discriminant, (usize, usize)>>> =
+    LazyLock::new(|| Mutex::new(IntMap::default()));
 
 // This is safe because:
 // 1. Containers are reset before being returned to pools, so they contain no values

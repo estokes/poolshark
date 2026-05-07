@@ -10,6 +10,7 @@
 //! You don't need to import anything from this module - the implementations are
 //! automatically available when you use the pooled types.
 use super::{location_id, Discriminant, IsoPoolable, Poolable};
+use ahash::{AHashMap, AHashSet};
 #[cfg(feature = "indexmap")]
 use indexmap::{IndexMap, IndexSet};
 use std::{
@@ -44,6 +45,31 @@ where
 {
     const DISCRIMINANT: Option<Discriminant> =
         { Discriminant::new_p3::<K, V, R>(location_id!()) };
+}
+
+impl<K, V> Poolable for AHashMap<K, V>
+where
+    K: Hash + Eq,
+{
+    fn empty() -> Self {
+        AHashMap::default()
+    }
+
+    fn reset(&mut self) {
+        self.clear()
+    }
+
+    fn capacity(&self) -> usize {
+        HashMap::capacity(self)
+    }
+}
+
+unsafe impl<K, V> IsoPoolable for AHashMap<K, V>
+where
+    K: Hash + Eq,
+{
+    const DISCRIMINANT: Option<Discriminant> =
+        { Discriminant::new_p2::<K, V>(location_id!()) };
 }
 
 #[cfg(feature = "indexmap")]
@@ -100,6 +126,30 @@ where
 {
     const DISCRIMINANT: Option<Discriminant> =
         Discriminant::new_p2::<K, R>(location_id!());
+}
+
+impl<K> Poolable for AHashSet<K>
+where
+    K: Hash + Eq,
+{
+    fn empty() -> Self {
+        AHashSet::default()
+    }
+
+    fn reset(&mut self) {
+        self.clear()
+    }
+
+    fn capacity(&self) -> usize {
+        HashSet::capacity(self)
+    }
+}
+
+unsafe impl<K> IsoPoolable for AHashSet<K>
+where
+    K: Hash + Eq,
+{
+    const DISCRIMINANT: Option<Discriminant> = Discriminant::new_p1::<K>(location_id!());
 }
 
 #[cfg(feature = "indexmap")]

@@ -92,7 +92,11 @@
 //! ```
 use global::WeakPool;
 pub use poolshark_derive::location_id;
-use std::alloc::Layout;
+use std::{
+    alloc::Layout,
+    hash::{Hash, Hasher},
+    mem,
+};
 
 pub mod global;
 pub mod local;
@@ -238,11 +242,20 @@ macro_rules! add_param {
 /// share pools (via the `LocationId`), and that the **memory layout** of type parameters
 /// is compatible. As long as containers are properly emptied before pooling (which `reset()`
 /// guarantees), the system is memory safe even with discriminant collisions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Discriminant {
     container: LocationId,
     elements: [ULayout; 3],
 }
+
+impl Hash for Discriminant {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        debug_assert!(mem::size_of::<Discriminant>() == 8);
+        state.write_u64(unsafe { mem::transmute::<Discriminant, u64>(*self) })
+    }
+}
+
+impl nohash::IsEnabled for Discriminant {}
 
 impl Discriminant {
     /// return a new empty discriminant

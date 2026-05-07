@@ -3,6 +3,7 @@ use super::global::{
     Pool, RawPool,
 };
 use crate::{local::LPooled, IsoPoolable};
+use ahash::{AHashMap, AHashSet};
 use fxhash::{FxHashMap, FxHashSet};
 use indexmap::{IndexMap, IndexSet};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -200,6 +201,11 @@ fn normal_pool_fxhashmap() {
 }
 
 #[test]
+fn normal_pool_ahashmap() {
+    mk_normal_pool_hashmap!(AHashMap)
+}
+
+#[test]
 fn normal_pool_indexmap() {
     mk_normal_pool_hashmap!(IndexMap)
 }
@@ -249,6 +255,11 @@ fn normal_pool_hashset() {
 #[test]
 fn normal_pool_fxhashset() {
     mk_normal_pool_hashset!(FxHashSet)
+}
+
+#[test]
+fn normal_pool_ahashset() {
+    mk_normal_pool_hashset!(AHashSet)
 }
 
 #[test]
@@ -395,6 +406,11 @@ fn local_pool_fxhashmap() {
 }
 
 #[test]
+fn local_pool_ahashmap() {
+    mk_local_pool_hashmap!(AHashMap, HashMap)
+}
+
+#[test]
 fn local_pool_indexmap() {
     mk_local_pool_hashmap!(IndexMap, HashMap)
 }
@@ -437,6 +453,11 @@ fn local_pool_hashset() {
 #[test]
 fn local_pool_fxhashset() {
     mk_local_pool_hashset!(FxHashSet, HashSet)
+}
+
+#[test]
+fn local_pool_ahashset() {
+    mk_local_pool_hashset!(AHashSet, HashSet)
 }
 
 #[test]

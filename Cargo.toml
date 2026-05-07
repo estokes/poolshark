@@ -20,16 +20,18 @@ serde = ["dep:serde", "dep:serde_derive"]
 
 [dependencies]
 crossbeam-queue = "0.3"
-fxhash = "0.2"
+nohash = "0.2"
 indexmap = { version = "2", optional = true }
 serde_derive = { version = "1", optional = true }
 serde = { version = "1", optional = true }
 triomphe = { version = "0.1", optional = true }
 poolshark_derive = { version = "0.1.1", path = "poolshark_derive" }
+ahash = "0.8.12"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 criterion = { version = "0.5", features = ["html_reports"] }
+fxhash = "0.2"
 
 [[bench]]
 name = "pooling"

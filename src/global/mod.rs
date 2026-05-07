@@ -40,8 +40,9 @@
 //! let map = global::take::<HashMap<String, i32>>();
 //! ```
 use crate::{Discriminant, IsoPoolable, Opaque, Poolable, RawPoolable};
+use ahash::AHashMap;
 use crossbeam_queue::ArrayQueue;
-use fxhash::FxHashMap;
+use nohash::IntMap;
 #[cfg(feature = "serde")]
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
@@ -49,7 +50,6 @@ use std::{
     borrow::Borrow,
     cell::RefCell,
     cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd},
-    collections::HashMap,
     default::Default,
     fmt::{self, Debug, Display},
     hash::{Hash, Hasher},
@@ -62,14 +62,14 @@ use std::{
 pub mod arc;
 
 thread_local! {
-    static POOLS: RefCell<FxHashMap<Discriminant, Opaque>> =
-        RefCell::new(HashMap::default());
+    static POOLS: RefCell<IntMap<Discriminant, Opaque>> =
+        RefCell::new(IntMap::default());
 }
 
 const DEFAULT_SIZES: (usize, usize) = (1024, 1024);
 
-static SIZES: LazyLock<Mutex<FxHashMap<Discriminant, (usize, usize)>>> =
-    LazyLock::new(|| Mutex::new(FxHashMap::default()));
+static SIZES: LazyLock<Mutex<IntMap<Discriminant, (usize, usize)>>> =
+    LazyLock::new(|| Mutex::new(IntMap::default()));
 
 // This is safe because:
 // 1. Containers are reset before being returned to pools, so they contain no values
@@ -198,8 +198,8 @@ pub fn pool_sz<T: IsoPoolable>(max: usize, max_elements: usize) -> Option<Pool<T
 }
 
 thread_local! {
-    static ANY_POOLS: RefCell<FxHashMap<TypeId, Box<dyn Any>>> =
-        RefCell::new(HashMap::default());
+    static ANY_POOLS: RefCell<AHashMap<TypeId, Box<dyn Any>>> =
+        RefCell::new(AHashMap::default());
 }
 
 /// Get a reference to a pool from the generic thread local pool set.
