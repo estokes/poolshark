@@ -25,15 +25,14 @@ macro_rules! impl_arc {
     ($name:ident, $inner:ident, $uniq:expr, $doc:expr) => {
         #[doc = $doc]
         #[derive(Clone)]
+        #[repr(transparent)]
         pub struct $name<T: Poolable> {
             inner: ManuallyDrop<$inner<(WeakPool<Self>, T)>>,
         }
 
         unsafe impl<T: Poolable> RawPoolable for $name<T> {
             fn empty(pool: super::WeakPool<Self>) -> Self {
-                Self {
-                    inner: ManuallyDrop::new($inner::new((pool, T::empty()))),
-                }
+                Self { inner: ManuallyDrop::new($inner::new((pool, T::empty()))) }
             }
 
             fn capacity(&self) -> usize {
@@ -140,8 +139,8 @@ macro_rules! impl_arc {
             ///
             /// If the Arc is not unique, this will clone the inner value.
             pub fn make_mut<'a>(&'a mut self) -> &'a mut T {
-                if let Some(p) =
-                    $inner::get_mut(&mut self.inner).map(|p| p as *mut (WeakPool<Self>, T))
+                if let Some(p) = $inner::get_mut(&mut self.inner)
+                    .map(|p| p as *mut (WeakPool<Self>, T))
                 {
                     return unsafe { &mut (*p).1 };
                 }
@@ -214,9 +213,7 @@ impl_arc!(
 impl<T: Poolable + Clone> Arc<T> {
     /// Downgrade the Arc to a weak pointer.
     pub fn downgrade(&self) -> Weak<T> {
-        Weak {
-            inner: ArcInner::downgrade(&*self.inner),
-        }
+        Weak { inner: ArcInner::downgrade(&*self.inner) }
     }
 
     /// Return the weak reference count of the arc.
@@ -235,9 +232,7 @@ pub struct Weak<T: Poolable> {
 
 impl<T: Poolable> Clone for Weak<T> {
     fn clone(&self) -> Self {
-        Weak {
-            inner: WeakInner::clone(&self.inner),
-        }
+        Weak { inner: WeakInner::clone(&self.inner) }
     }
 }
 
@@ -246,9 +241,8 @@ impl<T: Poolable> Weak<T> {
     ///
     /// Returns `None` if the inner value has already been dropped.
     pub fn upgrade(&self) -> Option<Arc<T>> {
-        WeakInner::upgrade(&self.inner).map(|inner| Arc {
-            inner: ManuallyDrop::new(inner),
-        })
+        WeakInner::upgrade(&self.inner)
+            .map(|inner| Arc { inner: ManuallyDrop::new(inner) })
     }
 
     /// Return the strong reference count.
