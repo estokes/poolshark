@@ -251,7 +251,8 @@ pub struct Discriminant {
 impl Hash for Discriminant {
     fn hash<H: Hasher>(&self, state: &mut H) {
         debug_assert!(mem::size_of::<Discriminant>() == 8);
-        state.write_u64(unsafe { mem::transmute::<Discriminant, u64>(*self) })
+        let bits = unsafe { mem::transmute::<Discriminant, u64>(*self) };
+        state.write_u64(bits.wrapping_mul(0x9e37_79b9_7f4a_7c15))
     }
 }
 
